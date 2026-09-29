@@ -109,3 +109,31 @@ func TestProductionTransportRefusesRedirects(t *testing.T) {
 		t.Fatal("redirect would be followed")
 	}
 }
+
+func TestStatsSupportsOlderOneShotResponsesAndRejectsConflictingIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name, id, read string
+		wantErr        bool
+	}{
+		{"current", testID, "2026-09-29T09:00:00Z", false},
+		{"older-one-shot-without-id", "", "2026-09-29T09:00:00Z", false},
+		{"conflicting-id", otherID, "2026-09-29T09:00:00Z", true},
+		{"stopped-between-requests", testID, "0001-01-01T00:00:00Z", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := fixtureClient(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/v1.48/containers/"+testID+"/stats" || r.URL.Query().Get("one-shot") != "true" || r.URL.Query().Get("stream") != "false" {
+					t.Error("unexpected stats target", r.URL)
+				}
+				fmt.Fprintf(w, `{"id":%q,"read":%q,"memory_stats":{"usage":1234}}`, tc.id, tc.read)
+			})
+			s, err := c.Stats(context.Background(), "/v1.48", testID)
+			if (err != nil) != tc.wantErr {
+				t.Fatal(err)
+			}
+			if err == nil && s.Memory.Usage != 1234 {
+				t.Fatal("sample lost")
+			}
+		})
+	}
+}

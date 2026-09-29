@@ -161,7 +161,7 @@ func inspectTarget(ctx context.Context, c *Client, api string, t Target, previou
 		s.StatsError = safeError(err)
 		return s, nil
 	}
-	r := &Resources{At: time.Now().UTC(), MemoryBytes: stats.Memory.Usage, MemoryLimitBytes: stats.Memory.Limit}
+	r := &Resources{At: stats.Read.UTC(), MemoryBytes: stats.Memory.Usage, MemoryLimitBytes: stats.Memory.Limit}
 	if previous != nil && stats.CPU.System > previous.CPU.System && stats.CPU.Usage.Total >= previous.CPU.Usage.Total {
 		cpus := stats.CPU.Online
 		if cpus == 0 {

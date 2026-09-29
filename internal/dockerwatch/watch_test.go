@@ -21,7 +21,7 @@ func TestObservationRestartRetainsHistoryAndNeverMutates(t *testing.T) {
 		case "/v1.56/containers/" + testID + "/json":
 			fmt.Fprintf(w, `{"Id":%q,"RestartCount":3,"State":{"Status":"running","Health":{"Status":"unhealthy","Log":[{"Output":"application-secret"}]}},"Config":{"Env":["TOKEN=application-secret"]}}`, testID)
 		case "/v1.56/containers/" + testID + "/stats":
-			fmt.Fprintf(w, `{"id":%q,"memory_stats":{"usage":4096,"limit":8192}}`, testID)
+			fmt.Fprintf(w, `{"id":%q,"read":"2026-09-29T09:00:00Z","memory_stats":{"usage":4096,"limit":8192}}`, testID)
 		default:
 			t.Errorf("unexpected endpoint %s", r.URL.Path)
 			w.WriteHeader(404)
@@ -87,7 +87,7 @@ func TestCPUSamplesAndCounterReset(t *testing.T) {
 			fmt.Fprintf(w, `{"Id":%q,"State":{"Status":"running"}}`, testID)
 			return
 		}
-		fmt.Fprintf(w, `{"id":%q,"cpu_stats":{"cpu_usage":{"total_usage":300},"system_cpu_usage":2000,"online_cpus":2}}`, testID)
+		fmt.Fprintf(w, `{"id":%q,"read":"2026-09-29T09:00:00Z","cpu_stats":{"cpu_usage":{"total_usage":300},"system_cpu_usage":2000,"online_cpus":2}}`, testID)
 	})
 	p := &Stats{}
 	p.CPU.Usage.Total = 200
@@ -113,7 +113,7 @@ func TestStreamReconnectAndObserverCancellation(t *testing.T) {
 		case strings.HasSuffix(r.URL.Path, "/json"):
 			fmt.Fprintf(w, `{"Id":%q,"State":{"Status":"running"}}`, testID)
 		case strings.HasSuffix(r.URL.Path, "/stats"):
-			fmt.Fprintf(w, `{"id":%q}`, testID)
+			fmt.Fprintf(w, `{"id":%q,"read":"2026-09-29T09:00:00Z"}`, testID)
 		case strings.HasSuffix(r.URL.Path, "/events"):
 			n := connections.Add(1)
 			fmt.Fprintf(w, "{\"Type\":\"container\",\"Action\":\"oom\",\"Actor\":{\"ID\":%q}}\n", testID)

@@ -150,8 +150,9 @@ type CPU struct {
 	Online uint64 `json:"online_cpus"`
 }
 type Stats struct {
-	ID     string `json:"id"`
-	CPU    CPU    `json:"cpu_stats"`
+	ID     string    `json:"id"`
+	Read   time.Time `json:"read"`
+	CPU    CPU       `json:"cpu_stats"`
 	Memory struct {
 		Usage uint64 `json:"usage"`
 		Limit uint64 `json:"limit"`
@@ -164,8 +165,14 @@ func (c *Client) Stats(ctx context.Context, api, id string) (Stats, error) {
 		return s, errors.New("full container ID required")
 	}
 	err := c.read(ctx, api+"/containers/"+id+"/stats?stream=false&one-shot=true", &s)
-	if err == nil && s.ID != id {
+	// Older daemons omit id/name on the one-shot path (for example Moby
+	// v28.0.4 daemon/stats.go). The endpoint still contains the full ID and
+	// Inspect verified it first. An explicit conflicting ID is never accepted.
+	if err == nil && s.ID != "" && s.ID != id {
 		err = errors.New("Docker stats returned a different container identity")
+	}
+	if err == nil && s.Read.IsZero() {
+		err = errors.New("Docker returned no resource sample; container may have stopped between requests")
 	}
 	return s, err
 }
