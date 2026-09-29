@@ -361,7 +361,8 @@ else
 fi
 ```
 
-Send post-action observations separately:
+Send post-action observations separately. An `emit` request requires an explicit
+observed result: `allowed`, `denied`, `blocked`, `failed`, or `success`.
 
 ```sh
 saga-watchdog emit --type network --action connect \

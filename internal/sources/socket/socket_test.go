@@ -25,17 +25,21 @@ func TestDecodeRequestsAndRejectOverrides(t *testing.T) {
 		}
 	}
 	for name, input := range map[string]string{
-		"malformed":      `{"operation":`,
-		"trailing":       `{"operation":"check","event":{"type":"file","action":"write","target":"a"}} {}`,
-		"unknown":        `{"operation":"check","allow":true,"event":{"type":"file","action":"write","target":"a"}}`,
-		"override":       `{"operation":"check","event":{"type":"file","action":"write","target":"a","ignore_policy":true}}`,
-		"timestamp":      `{"operation":"emit","event":{"type":"network","action":"connect","target":"a","timestamp":"2000-01-01"}}`,
-		"check result":   `{"operation":"check","event":{"type":"file","action":"write","target":"a","result":"allowed"}}`,
-		"metadata":       `{"operation":"emit","event":{"type":"network","action":"connect","target":"a","metadata":{"mode":"observe"}}}`,
-		"control":        `{"operation":"resume"}`,
-		"type":           `{"operation":"emit","event":{"type":"model-says-safe","action":"allow","target":"a"}}`,
-		"newline":        `{"operation":"check","event":{"type":"file","action":"write","target":"a\nb"}}`,
-		"missing target": `{"operation":"check","event":{"type":"file","action":"write"}}`,
+		"malformed":           `{"operation":`,
+		"trailing":            `{"operation":"check","event":{"type":"file","action":"write","target":"a"}} {}`,
+		"unknown":             `{"operation":"check","allow":true,"event":{"type":"file","action":"write","target":"a"}}`,
+		"override":            `{"operation":"check","event":{"type":"file","action":"write","target":"a","ignore_policy":true}}`,
+		"timestamp":           `{"operation":"emit","event":{"type":"network","action":"connect","target":"a","timestamp":"2000-01-01"}}`,
+		"check result":        `{"operation":"check","event":{"type":"file","action":"write","target":"a","result":"allowed"}}`,
+		"emit missing result": `{"operation":"emit","event":{"type":"network","action":"connect","target":"a"}}`,
+		"emit empty result":   `{"operation":"emit","event":{"type":"network","action":"connect","target":"a","result":""}}`,
+		"emit null result":    `{"operation":"emit","event":{"type":"network","action":"connect","target":"a","result":null}}`,
+		"emit invalid result": `{"operation":"emit","event":{"type":"network","action":"connect","target":"a","result":"unknown"}}`,
+		"metadata":            `{"operation":"emit","event":{"type":"network","action":"connect","target":"a","metadata":{"mode":"observe"}}}`,
+		"control":             `{"operation":"resume"}`,
+		"type":                `{"operation":"emit","event":{"type":"model-says-safe","action":"allow","target":"a"}}`,
+		"newline":             `{"operation":"check","event":{"type":"file","action":"write","target":"a\nb"}}`,
+		"missing target":      `{"operation":"check","event":{"type":"file","action":"write"}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := Decode([]byte(input), false); err == nil {
@@ -176,7 +180,7 @@ func TestConcurrentClientsAndCancelledHandlers(t *testing.T) {
 	// A handler awaiting a supervisor reply exits when its run is cancelled.
 	pending := make(chan error, 1)
 	go func() {
-		_, err := Send(s.Events, Request{Operation: "emit", Event: Input{Type: "tool", Action: "attempt", Target: "alternate-tool"}})
+		_, err := Send(s.Events, Request{Operation: "emit", Event: Input{Type: "tool", Action: "attempt", Target: "alternate-tool", Result: "failed"}})
 		pending <- err
 	}()
 	select {

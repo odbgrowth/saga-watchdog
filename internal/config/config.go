@@ -9,6 +9,7 @@ import (
 	"path"
 	"strings"
 	"time"
+	"unicode"
 
 	"gopkg.in/yaml.v3"
 )
@@ -137,7 +138,7 @@ func (c Config) Validate() error {
 	if c.Mode != "observe" && c.Mode != "enforce" {
 		return errors.New("mode must be observe or enforce")
 	}
-	if len(c.Project.Name) > 128 || strings.ContainsAny(c.Project.Name, "\x00\r\n") {
+	if len(c.Project.Name) > 128 || strings.ContainsFunc(c.Project.Name, unicode.IsControl) {
 		return errors.New("project.name must be at most 128 bytes without control characters")
 	}
 	if c.Run.MaxDuration <= 0 || c.Run.MaxDuration > 7*24*time.Hour {

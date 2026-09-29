@@ -81,6 +81,9 @@ func Validate(r Request, controls bool) error {
 	if r.Operation == "check" && r.Event.Result != "" {
 		return errors.New("check cannot supply a result")
 	}
+	if r.Operation == "emit" && r.Event.Result == "" {
+		return errors.New("emit requires an observed result")
+	}
 	switch r.Event.Result {
 	case "", "allowed", "denied", "blocked", "failed", "success":
 	default:

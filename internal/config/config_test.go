@@ -1,10 +1,33 @@
 package config
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestProjectNamesRejectControlCharacters(t *testing.T) {
+	// Cover ASCII controls, DEL and C1 controls, including terminal escapes.
+	for r := 0; r <= 0x9f; r++ {
+		if r >= 0x20 && r < 0x7f {
+			continue
+		}
+		t.Run(fmt.Sprintf("U+%04X", r), func(t *testing.T) {
+			input := fmt.Sprintf("project:\n  name: \"demo\\u%04Xname\"\n", r)
+			if _, err := Parse(strings.NewReader(input)); err == nil {
+				t.Fatal("project name containing a control character was accepted")
+			}
+		})
+	}
+	for _, name := range []string{"", "Customer project", "Boekhouding België", "顧客プロジェクト"} {
+		cfg := Default()
+		cfg.Project.Name = name
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("valid project name %q rejected: %v", name, err)
+		}
+	}
+}
 
 func TestMinimalAndOverrides(t *testing.T) {
 	cfg, err := Parse(strings.NewReader(DefaultYAML))
