@@ -36,8 +36,11 @@ Usage:
   saga-watchdog pause|resume|kill <run-id>
   saga-watchdog check --type TYPE --action ACTION --target TARGET [--run ID]
   saga-watchdog emit --type TYPE --action ACTION --target TARGET --result RESULT [--run ID]
+  saga-watchdog docker validate|watch|status|events --config FILE
+  saga-watchdog docker watch --config FILE --once
 
 Linux and macOS process supervision. No file-read or raw network monitoring.
+Docker observation uses a separate config and needs no Git repository.
 `
 
 func main() { os.Exit(cli(os.Args[1:])) }
@@ -55,6 +58,9 @@ func cli(args []string) int {
 	if args[0] == "version" {
 		fmt.Println("saga-watchdog", version)
 		return 0
+	}
+	if args[0] == "docker" {
+		return dockerCLI(args[1:])
 	}
 	cwd, err := os.Getwd()
 	if err != nil {
