@@ -59,13 +59,14 @@ jobs:
           version="${RELEASE_TAG#v}"
           mkdir -p dist/package
           cp README.md SECURITY.md LICENSE dist/package/
+          cp -R docs examples deploy dist/package/
           for target_os in linux darwin; do
             for target_arch in amd64 arm64; do
               CGO_ENABLED=0 GOOS="$target_os" GOARCH="$target_arch" \
                 go build -trimpath -ldflags "-s -w -X main.version=$version" \
                 -o dist/package/saga-watchdog ./cmd/saga-watchdog
               tar -czf "dist/saga-watchdog_${version}_${target_os}_${target_arch}.tar.gz" \
-                -C dist/package saga-watchdog README.md SECURITY.md LICENSE
+                -C dist/package saga-watchdog README.md SECURITY.md LICENSE docs examples deploy
             done
           done
           cd dist
@@ -76,4 +77,3 @@ jobs:
         run: |
           gh release create "$RELEASE_TAG" dist/*.tar.gz dist/SHA256SUMS \
             --verify-tag --generate-notes --title "SAGA Watchdog $RELEASE_TAG"
-

@@ -82,37 +82,46 @@ func Load(filename string) (Config, error) {
 // Parse accepts exactly one mapping document, with no unknown fields, duplicate
 // keys, aliases, or null values. Bounded input prevents accidental huge policies.
 func Parse(r io.Reader) (Config, error) {
-	data, err := io.ReadAll(io.LimitReader(r, 64*1024+1))
-	if err != nil {
-		return Config{}, fmt.Errorf("read policy: %w", err)
-	}
-	if len(data) > 64*1024 {
-		return Config{}, errors.New("policy exceeds 64 KiB")
-	}
-	var doc yaml.Node
-	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return Config{}, fmt.Errorf("parse policy YAML: %w", err)
-	}
-	if len(doc.Content) != 1 || doc.Content[0].Kind != yaml.MappingNode {
-		return Config{}, errors.New("policy must be a non-empty YAML mapping")
-	}
-	if err := validateNode(&doc); err != nil {
-		return Config{}, err
-	}
 	cfg := Default()
-	decoder := yaml.NewDecoder(strings.NewReader(string(data)))
-	decoder.KnownFields(true)
-	if err := decoder.Decode(&cfg); err != nil {
-		return Config{}, fmt.Errorf("parse policy YAML: %w", err)
-	}
-	var extra yaml.Node
-	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
-		return Config{}, errors.New("policy must contain exactly one YAML document")
+	if err := DecodeStrict(r, &cfg); err != nil {
+		return Config{}, err
 	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+// DecodeStrict shares the bounded YAML syntax rules across the separate CLI and
+// service configurations. Each caller validates its own schema and defaults.
+func DecodeStrict(r io.Reader, target any) error {
+	data, err := io.ReadAll(io.LimitReader(r, 64*1024+1))
+	if err != nil {
+		return fmt.Errorf("read policy: %w", err)
+	}
+	if len(data) > 64*1024 {
+		return errors.New("policy exceeds 64 KiB")
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return fmt.Errorf("parse policy YAML: %w", err)
+	}
+	if len(doc.Content) != 1 || doc.Content[0].Kind != yaml.MappingNode {
+		return errors.New("policy must be a non-empty YAML mapping")
+	}
+	if err := validateNode(&doc); err != nil {
+		return err
+	}
+	decoder := yaml.NewDecoder(strings.NewReader(string(data)))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(target); err != nil {
+		return fmt.Errorf("parse policy YAML: %w", err)
+	}
+	var extra yaml.Node
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		return errors.New("policy must contain exactly one YAML document")
+	}
+	return nil
 }
 
 func validateNode(n *yaml.Node) error {

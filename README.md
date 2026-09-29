@@ -2,10 +2,18 @@
 
 **Watch what AI agents do, not what they say they did.**
 
-SAGA Watchdog is a small local supervisor for AI coding agents. It runs as a
+SAGA Watchdog provides a local supervisor for AI coding agents and a separate
+observer for existing Docker agents. The coding supervisor runs as a
 separate process, evaluates deterministic policies, detects escalation in
 observed or reported events, and can pause or terminate the process group it
 started. It never asks an LLM whether an action is safe.
+
+For **already-running company agents**, use the
+[Docker observer installation guide](docs/docker-observer.md). It follows
+explicit container IDs, health and lifecycle events without a Git repository or
+session time limit. This first adapter only observes: it never starts, pauses or
+stops a container, and does not inspect tool/API actions. A Linux systemd example
+is included; automated Ansible rollout is a subsequent step.
 
 ## Five-minute quick start
 

@@ -1,6 +1,7 @@
 # Security policy
 
 SAGA Watchdog is a local process supervisor with deterministic policy decisions.
+It also has a separate read-only Docker observation mode for existing agents.
 It is not an operating-system sandbox. Read these boundaries before relying on it
 for a sensitive workload.
 
@@ -46,7 +47,20 @@ redaction path is in scope.
 
 ## Known limitations
 
-- Watchdog and the agent normally run as the same OS user. A hostile agent can
+- The Docker observer sends only GET requests, but access to a Docker socket is
+  administrative access, not an OS-enforced read-only capability. Its trusted
+  service account and configuration must be kept outside the agent's authority.
+  A read-only socket bind mount does not restrict Docker API methods.
+- Docker observation can miss events during connection gaps or queue overflow.
+  Polling restores current state, not complete history. No healthcheck means
+  unknown application health; resource metrics do not reveal AI decisions.
+  Stopping/crashing the observer never stops the selected containers. Status
+  files are historical snapshots; use `docker status` for heartbeat freshness.
+- Observer history is size-bounded and rotates. It is not immutable, complete,
+  or a substitute for an application action authorization gateway. No container
+  control or automatic intervention is implemented in this adapter.
+
+- In coding-agent mode, Watchdog and the agent normally run as the same OS user. A hostile agent can
   potentially signal the supervisor, alter its on-disk configuration or logs,
   access local sockets, or change another same-user process. Process separation
   is not a tamper-resistant privilege boundary.

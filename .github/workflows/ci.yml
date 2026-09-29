@@ -42,3 +42,11 @@ jobs:
       - run: go test ./...
       - run: go test -race ./...
       - run: go build ./cmd/saga-watchdog
+      - name: Docker observer acceptance (disposable containers)
+        if: runner.os == 'Linux'
+        env:
+          SAGA_DOCKER_TEST_SOCKET: /var/run/docker.sock
+          SAGA_DOCKER_TEST_IMAGE: alpine:3.22
+        run: |
+          docker pull alpine:3.22
+          go test -count=1 -run TestDockerIntegration -v ./internal/dockerwatch
