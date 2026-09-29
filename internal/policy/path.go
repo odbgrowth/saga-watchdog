@@ -90,6 +90,14 @@ func lexicalRootFile(root, target, name string) bool {
 			return true
 		}
 	}
+	// Resolve only the parent: the policy leaf may itself have been replaced
+	// by an external/dangling symlink. This also handles /var vs /private/var
+	// combined with a separate alias of the project directory on macOS.
+	parent, parentErr := filepath.EvalSymlinks(filepath.Dir(candidate))
+	canonical, rootErr := filepath.EvalSymlinks(root)
+	if parentErr == nil && rootErr == nil && parent == canonical && filepath.Base(candidate) == name {
+		return true
+	}
 	return false
 }
 

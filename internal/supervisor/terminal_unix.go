@@ -29,7 +29,8 @@ func prepareTerminal(stdin io.Reader, attr *syscall.SysProcAttr) (*terminalState
 	}
 	fd := int(file.Fd())
 	group, err := unix.IoctlGetInt(fd, unix.TIOCGPGRP)
-	if errors.Is(err, unix.ENOTTY) {
+	// Darwin reports ENODEV for non-terminal devices such as /dev/null.
+	if errors.Is(err, unix.ENOTTY) || errors.Is(err, unix.ENODEV) {
 		return nil, nil
 	}
 	if err != nil {

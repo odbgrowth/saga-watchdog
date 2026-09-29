@@ -46,6 +46,14 @@ type Store struct {
 }
 
 func ProjectDir(root string) (string, error) {
+	root, err := filepath.Abs(root)
+	if err != nil {
+		return "", err
+	}
+	root, err = filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", err
+	}
 	base := os.Getenv("SAGA_WATCHDOG_STATE_DIR")
 	if base == "" {
 		home, err := os.UserHomeDir()
@@ -63,7 +71,7 @@ func ProjectDir(root string) (string, error) {
 			base = filepath.Join(base, "saga-watchdog")
 		}
 	}
-	base, err := filepath.Abs(base)
+	base, err = filepath.Abs(base)
 	if err != nil {
 		return "", err
 	}
@@ -231,6 +239,10 @@ func Locate(root, id string) (string, Run, error) {
 		return "", Run{}, errors.New("invalid run ID")
 	}
 	dir := filepath.Join(base, id)
+	dir, err = filepath.EvalSymlinks(dir)
+	if err != nil {
+		return "", Run{}, err
+	}
 	f, err := os.Open(filepath.Join(dir, "run.json"))
 	if err != nil {
 		return "", Run{}, err

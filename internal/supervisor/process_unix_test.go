@@ -122,6 +122,24 @@ func TestCommandValidation(t *testing.T) {
 	}
 }
 
+func TestNonTerminalFileInput(t *testing.T) {
+	input, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	p, err := Start(helperArgv(t, "exit", "0"), t.TempDir(),
+		append(os.Environ(), "SAGA_SUPERVISOR_TEST_HELPER=1", "GORACE=atexit_sleep_ms=0"),
+		input, io.Discard, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = p.Stop(0) })
+	if r := result(t, p); r.ExitCode != 0 || r.Err != nil {
+		t.Fatalf("non-terminal stdin rejected: %+v", r)
+	}
+}
+
 func TestWorkingDirectoryAndEnvironment(t *testing.T) {
 	var output bytes.Buffer
 	dir := t.TempDir()

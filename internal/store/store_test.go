@@ -63,6 +63,18 @@ func TestStateAliasCannotPlaceAuditFilesInsideProject(t *testing.T) {
 	}
 }
 
+func TestProjectAliasLocatesTheSameRun(t *testing.T) {
+	root, s, r := storeFixture(t)
+	alias := filepath.Join(t.TempDir(), "project-alias")
+	if err := os.Symlink(root, alias); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	dir, got, err := Locate(alias, r.ID)
+	if err != nil || dir != s.Dir || got.ID != r.ID {
+		t.Fatalf("project alias lost run: %s, %+v, %v", dir, got, err)
+	}
+}
+
 func TestRunIDsRejectTraversalAndCreateDoesNotOverwrite(t *testing.T) {
 	root, s, r := storeFixture(t)
 	if !ValidID(r.ID) {

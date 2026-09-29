@@ -78,8 +78,8 @@ func (p *Process) control(sig unix.Signal) error {
 	return p.signalGroup(sig)
 }
 
-// Stop is idempotent. It sends TERM, resumes paused members so they can handle
-// TERM, waits the requested grace period, and sends KILL to the entire group.
+// Stop is idempotent. It resumes paused members before sending TERM so Darwin
+// can deliver the handler, waits the grace period, and sends KILL to the group.
 // It deliberately does not return early when just the group leader exits.
 // Done reports the final exit after reaping; Stop itself waits for escalation.
 func (p *Process) Stop(grace time.Duration) error {
@@ -90,8 +90,8 @@ func (p *Process) Stop(grace time.Duration) error {
 			return
 		}
 		p.terminating = true
-		termErr := p.signalGroup(unix.SIGTERM)
 		contErr := p.signalGroup(unix.SIGCONT)
+		termErr := p.signalGroup(unix.SIGTERM)
 		p.mu.Unlock()
 		if grace > 0 {
 			timer := time.NewTimer(grace)
@@ -114,7 +114,7 @@ func (p *Process) signalGroup(sig unix.Signal) error {
 	if p.pid <= 1 {
 		return errors.New("invalid owned process group")
 	}
-	err := unix.Kill(-p.pid, sig)
+	err := signalOwnedGroup(p.pid, sig)
 	if errors.Is(err, unix.ESRCH) {
 		return nil
 	}
