@@ -53,3 +53,42 @@ func TestRootAliasAndPolicySymlinkReplacement(t *testing.T) {
 		}
 	}
 }
+
+func TestProtectedSymlinkNamesRetainTheirRules(t *testing.T) {
+	for _, tc := range []struct{ path, rule string }{
+		{".env", "protected-path"},
+		{".git/config", "git-security-modification"},
+		{".github/workflows/build.yml", "ci-workflow-modification"},
+		{"settings/locked.yml", "protected-path"},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			root := t.TempDir()
+			ordinary := filepath.Join(root, "ordinary.txt")
+			if err := os.WriteFile(ordinary, []byte("ordinary"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			link := filepath.Join(root, filepath.FromSlash(tc.path))
+			if err := os.MkdirAll(filepath.Dir(link), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(ordinary, link); err != nil {
+				t.Skipf("symlinks unavailable: %v", err)
+			}
+			alias := filepath.Join(t.TempDir(), "project-alias")
+			if err := os.Symlink(root, alias); err != nil {
+				t.Fatal(err)
+			}
+			cfg := config.Default()
+			cfg.Filesystem.Protect = append(cfg.Filesystem.Protect, "settings/locked.yml")
+			cfg.Filesystem.Ignore = []string{"**"}
+			for _, target := range []string{tc.path, link, filepath.Join(alias, filepath.FromSlash(tc.path))} {
+				for _, action := range []string{"create", "write", "chmod"} {
+					d := New(cfg, alias).Evaluate(event.Event{Timestamp: epoch, Type: "file", Action: action, Target: target})
+					if d.Action != "pause" || d.RuleID != tc.rule {
+						t.Errorf("%s %s: %+v, want pause/%s", action, target, d, tc.rule)
+					}
+				}
+			}
+		})
+	}
+}
