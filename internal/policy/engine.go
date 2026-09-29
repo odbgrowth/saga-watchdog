@@ -114,19 +114,25 @@ func (e *Engine) file(ev event.Event, now time.Time) Decision {
 	if target == config.Filename {
 		return decide("kill", "policy-tamper", config.Filename+" changed during an active run")
 	}
+	lexical, err := normalize(e.root, ev.Target, false)
+	if err != nil {
+		return decide("pause", "unsafe-path", err.Error())
+	}
 	removed := ev.Action == "delete" || ev.Action == "rename"
 	if removed && target == "." {
 		return decide("kill", "policy-tamper", "project root containing active policy was removed or renamed")
 	}
-	if target == ".git" || target == ".git/config" || Match(".git/hooks/**", target) {
-		return decide("pause", "git-security-modification", "Git security configuration changed")
-	}
-	if Match(".github/workflows/**", target) || (removed && target == ".github") {
-		return decide("pause", "ci-workflow-modification", "CI workflow changed")
-	}
-	for _, pattern := range e.cfg.Filesystem.Protect {
-		if Match(pattern, target) {
-			return decide("pause", "protected-path", "protected project path changed")
+	for _, name := range []string{lexical, target} {
+		if name == ".git" || name == ".git/config" || Match(".git/hooks/**", name) {
+			return decide("pause", "git-security-modification", "Git security configuration changed")
+		}
+		if Match(".github/workflows/**", name) || (removed && name == ".github") {
+			return decide("pause", "ci-workflow-modification", "CI workflow changed")
+		}
+		for _, pattern := range e.cfg.Filesystem.Protect {
+			if Match(pattern, name) {
+				return decide("pause", "protected-path", "protected project path changed")
+			}
 		}
 	}
 	if Ignored(target, e.cfg.Filesystem.Ignore) {

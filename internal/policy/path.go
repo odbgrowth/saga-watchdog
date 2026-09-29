@@ -15,6 +15,12 @@ import (
 // symlink followed by a not-yet-created file cannot hide an out-of-root target.
 // This is an observation-time check, not an atomic OS filesystem sandbox.
 func Normalize(root, target string) (string, error) {
+	return normalize(root, target, true)
+}
+
+// normalize can retain the lexical name so resolving a symlink cannot erase
+// protection attached to the path that was requested or observed.
+func normalize(root, target string, followSymlinks bool) (string, error) {
 	if target == "" || strings.ContainsRune(target, '\x00') {
 		return "", errors.New("path is empty or contains a NUL byte")
 	}
@@ -41,19 +47,24 @@ func Normalize(root, target string) (string, error) {
 		candidate = filepath.Join(canonicalRoot, candidate)
 	}
 	candidate = filepath.Clean(candidate)
-	if _, err = contained(canonicalRoot, candidate); err != nil {
+	relative, err := contained(canonicalRoot, candidate)
+	if err != nil {
 		// macOS and project symlinks can give the root two legitimate names.
-		if _, lexicalErr := contained(lexicalRoot, candidate); lexicalErr != nil {
+		var lexicalErr error
+		relative, lexicalErr = contained(lexicalRoot, candidate)
+		if lexicalErr != nil {
 			return "", err
 		}
 	}
-	resolved, err := resolveExisting(candidate)
-	if err != nil {
-		return "", err
-	}
-	relative, err := contained(canonicalRoot, resolved)
-	if err != nil {
-		return "", err
+	if followSymlinks {
+		resolved, err := resolveExisting(candidate)
+		if err != nil {
+			return "", err
+		}
+		relative, err = contained(canonicalRoot, resolved)
+		if err != nil {
+			return "", err
+		}
 	}
 	relative = filepath.ToSlash(relative)
 	if runtime.GOOS == "windows" {

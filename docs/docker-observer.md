@@ -1,10 +1,12 @@
 # Observe existing company agents
 
+[Back to the overview](../README.md)
+
 The Docker observer runs beside existing containers. It never creates, starts,
 pauses, restarts, stops or removes an agent. It requires neither a Git checkout
 nor a session time limit. Stopping or updating SAGA leaves selected containers
-running. This is the first runtime-observation step toward company deployments;
-automatic intervention and tool/API authorization are not implemented here.
+running. Automatic intervention and tool/API authorization are not implemented
+in this mode.
 
 ## What is visible
 
@@ -13,7 +15,8 @@ automatic intervention and tool/API authorization are not implemented here.
   healthcheck; a running container is not evidence that its application works.
 - Raw memory usage including cache, memory limit, and CPU percentage calculated
   between samples. CPU is absent until there are two valid samples and can
-  exceed 100% on multiple cores. Counter resets invalidate the sample.
+  exceed 100% on multiple cores. Counter resets and a changed restart count
+  invalidate the CPU baseline.
 - Live lifecycle, OOM and health events. Docker disconnections and reconnects
   are logged. Periodic inspection reconciles the present state after gaps.
 
@@ -26,22 +29,50 @@ Application action checks need a separate integration.
 ## Prerequisites and installation
 
 Start on a Linux host with Docker Engine and a local Unix socket. The client
-negotiates API versions 1.41 through 1.56. Other versions outside this range fail
+negotiates an API version in the supported range 1.41 through 1.56. Newer daemons
+work if they still accept a version in this range; incompatible ranges fail
 visibly. Local Unix sockets on macOS can be used for development; the systemd
 example targets Linux. Native Windows named pipes, remote Docker endpoints,
 Swarm/Kubernetes controllers and automatic replacement discovery are not
 supported by this first adapter.
 
-There is no published release containing this feature yet. On a development
-machine with Go 1.26+, build from the branch/commit containing this change:
+There is no published binary release yet. On a build machine with Git and Go
+1.26 or newer, get the source from `main`. For repeatable deployments, check out
+the reviewed commit you intend to deploy before building:
 
 ```sh
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o saga-watchdog ./cmd/saga-watchdog
+git clone --branch main --single-branch https://github.com/odbgrowth/saga-watchdog.git
+cd saga-watchdog
+git rev-parse HEAD
+target_arch=amd64 # Use arm64 for an ARM server.
+revision="$(git rev-parse --short=12 HEAD)"
+CGO_ENABLED=0 GOOS=linux GOARCH="$target_arch" \
+  go build -trimpath -ldflags "-X main.version=dev-$revision" \
+  -o saga-watchdog ./cmd/saga-watchdog
+tar -czf "saga-watchdog-linux-$target_arch.tar.gz" \
+  saga-watchdog README.md SECURITY.md CONTRIBUTING.md LICENSE docs examples deploy
+sha256sum "saga-watchdog-linux-$target_arch.tar.gz" > SHA256SUMS
 ```
 
-Choose `GOARCH=arm64` for an ARM server. Copy that binary to the pilot host;
-Go and the source repository are not needed on the host. When this feature is
-released, prefer its versioned archive and verify the published checksum.
+On macOS, use `shasum -a 256` instead of `sha256sum`. Transfer the archive and
+`SHA256SUMS` to the pilot host using your normal SSH/file-transfer process.
+The archive includes the configuration and service files used below; copying
+only the binary is not enough for these instructions. On the Linux pilot host,
+from the directory containing those two transferred files:
+
+```sh
+sha256sum -c SHA256SUMS
+mkdir saga-watchdog-install
+tar -xzf saga-watchdog-linux-amd64.tar.gz -C saga-watchdog-install
+cd saga-watchdog-install
+./saga-watchdog version
+```
+
+Use the `arm64` archive name on an ARM server. The checksum detects transfer
+errors; obtain it from your trusted build machine. Go and a Git checkout are
+not needed on the pilot host. Run the remaining installation commands from this
+extracted directory. These commands target a systemd-based Linux host with the
+`docker` group, `useradd`, `usermod` and `sudo`, such as Ubuntu or Debian.
 
 One-time administrator setup on a Linux host (adjust an existing service account
 instead of creating it again):
@@ -130,8 +161,8 @@ History is local JSONL: `events.jsonl` plus three rotated backups, each at most
 restarts and records each observer session. `events` prints the retained files
 oldest first; concurrent rotation can affect this snapshot. Retention is by
 size, not age, and is not an immutable compliance archive. Resource samples are
-in the current status, not an unbounded time-series database. There are no remote
-notifications in this task.
+in the current status, not an unbounded time-series database. Email, webhooks and
+a dashboard are not implemented; status and history are available locally.
 
 Only one observer may use a state directory. Each status is bound to its loaded
 configuration; a status query with changed configuration reports a mismatch
@@ -146,8 +177,14 @@ sudo systemctl disable --now saga-watchdog-docker
 ```
 
 This stops only SAGA. Keep the configuration and history for inspection or a
-later reinstall. Automated Ansible rollout and intervention rules are subsequent
-tasks, not capabilities of this observer.
+later reinstall. For an update, build and transfer the reviewed replacement,
+stop this SAGA service, replace its binary, and start the service again. Preserve
+the configuration and state directory. This creates an observation gap but does
+not stop the agents. Keep the previous binary for rollback.
+
+Automated Ansible rollout and intervention rules are not implemented. The
+systemd example still needs validation on your chosen Linux host; CI tests the
+observer against Docker, not an installed systemd service.
 
 ## Reproducible acceptance check
 

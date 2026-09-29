@@ -184,10 +184,11 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 		if d.Action == "allow" {
 			return
 		}
-		fmt.Fprintf(os.Stderr, "WATCHDOG %s [%s] %s\n", strings.ToUpper(d.Action), d.RuleID, event.Redact(d.Reason))
 		if c.Mode == "observe" {
+			fmt.Fprintf(os.Stderr, "WATCHDOG OBSERVE [%s] would %s: %s\n", d.RuleID, d.Action, event.Redact(d.Reason))
 			return
 		}
+		fmt.Fprintf(os.Stderr, "WATCHDOG %s [%s] %s\n", strings.ToUpper(d.Action), d.RuleID, event.Redact(d.Reason))
 		if childExited {
 			if d.Action == "pause" || d.Action == "kill" {
 				rememberExitViolation(d)

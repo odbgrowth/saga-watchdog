@@ -32,6 +32,14 @@ jobs:
           go test ./...
           go test -race ./...
           go build ./cmd/saga-watchdog
+      - name: Docker observer acceptance (disposable containers)
+        if: runner.os == 'Linux'
+        env:
+          SAGA_DOCKER_TEST_SOCKET: /var/run/docker.sock
+          SAGA_DOCKER_TEST_IMAGE: alpine:3.22
+        run: |
+          docker pull alpine:3.22
+          go test -count=1 -run TestDockerIntegration -v ./internal/dockerwatch
 
   publish:
     needs: test
@@ -58,7 +66,7 @@ jobs:
           }
           version="${RELEASE_TAG#v}"
           mkdir -p dist/package
-          cp README.md SECURITY.md LICENSE dist/package/
+          cp README.md SECURITY.md CONTRIBUTING.md LICENSE dist/package/
           cp -R docs examples deploy dist/package/
           for target_os in linux darwin; do
             for target_arch in amd64 arm64; do
@@ -66,7 +74,7 @@ jobs:
                 go build -trimpath -ldflags "-s -w -X main.version=$version" \
                 -o dist/package/saga-watchdog ./cmd/saga-watchdog
               tar -czf "dist/saga-watchdog_${version}_${target_os}_${target_arch}.tar.gz" \
-                -C dist/package saga-watchdog README.md SECURITY.md LICENSE docs examples deploy
+                -C dist/package saga-watchdog README.md SECURITY.md CONTRIBUTING.md LICENSE docs examples deploy
             done
           done
           cd dist
