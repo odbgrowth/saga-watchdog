@@ -25,7 +25,10 @@ func TestDockerIntegration(t *testing.T) {
 	if image == "" {
 		image = "alpine:3.22"
 	}
-	c := NewClient(socket, 3*time.Second)
+	// Fixture creation/image unpacking can be slower than observation on a busy
+	// CI daemon. Keep its administrative client separate from the observer's
+	// deliberately short read timeouts.
+	c := NewClient(socket, 30*time.Second)
 	defer c.Close()
 	api, err := c.Version(context.Background())
 	if err != nil {
@@ -41,7 +44,7 @@ func TestDockerIntegration(t *testing.T) {
 			}
 			input = bytes.NewReader(b)
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		r, err := http.NewRequestWithContext(ctx, method, c.base+api+path, input)
 		if err != nil {
@@ -117,6 +120,8 @@ func TestDockerIntegration(t *testing.T) {
 	cfg.Socket = socket
 	cfg.Targets[0].ID = id
 	cfg.RequestTimeout = 3 * time.Second
+	observerClient := NewClient(socket, cfg.RequestTimeout)
+	defer observerClient.Close()
 	wait := func(description string, test func(Snapshot) bool) {
 		t.Helper()
 		until := time.Now().Add(15 * time.Second)
@@ -136,7 +141,7 @@ func TestDockerIntegration(t *testing.T) {
 	start := func() func() {
 		ctx, cancel := context.WithCancel(context.Background())
 		done := make(chan error, 1)
-		go func() { done <- Run(ctx, cfg, c, false) }()
+		go func() { done <- Run(ctx, cfg, observerClient, false) }()
 		stopped := false
 		stop := func() {
 			if stopped {
