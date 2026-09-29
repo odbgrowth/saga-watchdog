@@ -1,0 +1,79 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    env:
+      GOFLAGS: -mod=readonly
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Verify source
+        shell: bash
+        run: |
+          test -z "$(gofmt -l .)"
+          go vet ./...
+          go test ./...
+          go test -race ./...
+          go build ./cmd/saga-watchdog
+
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      GOFLAGS: -mod=readonly
+      RELEASE_TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Build release archives and checksums
+        shell: bash
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "Expected a stable release tag such as v0.1.0."
+            exit 1
+          }
+          version="${RELEASE_TAG#v}"
+          mkdir -p dist/package
+          cp README.md SECURITY.md LICENSE dist/package/
+          for target_os in linux darwin; do
+            for target_arch in amd64 arm64; do
+              CGO_ENABLED=0 GOOS="$target_os" GOARCH="$target_arch" \
+                go build -trimpath -ldflags "-s -w -X main.version=$version" \
+                -o dist/package/saga-watchdog ./cmd/saga-watchdog
+              tar -czf "dist/saga-watchdog_${version}_${target_os}_${target_arch}.tar.gz" \
+                -C dist/package saga-watchdog README.md SECURITY.md LICENSE
+            done
+          done
+          cd dist
+          sha256sum saga-watchdog_*.tar.gz > SHA256SUMS
+      - name: Publish tagged release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$RELEASE_TAG" dist/*.tar.gz dist/SHA256SUMS \
+            --verify-tag --generate-notes --title "SAGA Watchdog $RELEASE_TAG"
+

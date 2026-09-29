@@ -1,0 +1,36 @@
+# Copy to .saga-watchdog.yaml in your Git project, inspect, then run validate.
+# Unspecified values come from the coding-agent profile.
+version: 1
+profile: coding-agent
+mode: enforce
+
+project:
+  name: my-project
+
+run:
+  max_duration: 2h
+  stop_grace_period: 5s
+
+git:
+  protected_branches: [main, master]
+  allow_protected: false
+
+filesystem:
+  # More than this many distinct delete/rename paths in the window pauses a run.
+  delete_threshold: 100
+  delete_window: 10s
+  # The profile protects policy, Git security files, CI and secret-like writes.
+  # Default ignores skip node_modules, vendor, dist, build and .git/objects.
+  # Omit protect/ignore here to retain the profile's path lists.
+
+escalation:
+  window: 120s
+  warn_after: 2
+  pause_after: 3
+  kill_after: 5
+
+network:
+  # Optional exact-hostname deny list for cooperative check/emit integrations.
+  # Empty by default. This does not block operating-system network traffic.
+  deny: [blocked.example.com]
+
