@@ -16,6 +16,13 @@ import (
 )
 
 func TestInteractiveTerminalHandoffAndRestore(t *testing.T) {
+	for _, mode := range []string{"tty-owner", "tty-owner-tostop", "tty-owner-start-failure"} {
+		t.Run(mode, func(t *testing.T) { testInteractiveTerminal(t, mode) })
+	}
+}
+
+func testInteractiveTerminal(t *testing.T, mode string) {
+	t.Helper()
 	masterFD, err := unix.Open("/dev/ptmx", unix.O_RDWR|unix.O_NOCTTY|unix.O_CLOEXEC, 0)
 	if err != nil {
 		t.Skipf("PTY unavailable in test environment: %v", err)
@@ -35,7 +42,7 @@ func TestInteractiveTerminalHandoffAndRestore(t *testing.T) {
 	}
 	slave := os.NewFile(uintptr(slaveFD), "pty-slave")
 	defer slave.Close()
-	argv := helperArgv(t, "tty-owner")
+	argv := helperArgv(t, mode)
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Env = append(os.Environ(), "SAGA_SUPERVISOR_TEST_HELPER=1", "GORACE=atexit_sleep_ms=0")
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = slave, slave, slave
@@ -74,9 +81,11 @@ func TestInteractiveTerminalHandoffAndRestore(t *testing.T) {
 			}
 		}
 	}
-	waitLine("TTY ready")
-	if _, err := master.WriteString("hello\n"); err != nil {
-		t.Fatal(err)
+	if mode != "tty-owner-start-failure" {
+		waitLine("TTY ready")
+		if _, err := master.WriteString("hello\n"); err != nil {
+			t.Fatal(err)
+		}
 	}
 	waitLine("TTY restored")
 	select {

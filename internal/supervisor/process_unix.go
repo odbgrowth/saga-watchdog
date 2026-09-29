@@ -19,15 +19,15 @@ import (
 // Methods may be called concurrently; PID is informational, never an input
 // to a control operation.
 type Process struct {
-	cmd *exec.Cmd
-	pid int
-	tty *terminalState
-	done chan Result
-	mu sync.Mutex
+	cmd         *exec.Cmd
+	pid         int
+	tty         *terminalState
+	done        chan Result
+	mu          sync.Mutex
 	terminating bool
-	finished bool
-	stopOnce sync.Once
-	stopErr error
+	finished    bool
+	stopOnce    sync.Once
+	stopErr     error
 }
 
 func Supported() bool { return true }
@@ -63,7 +63,7 @@ func (p *Process) PID() int { return p.pid }
 // then closes. It is intended to have one consumer.
 func (p *Process) Done() <-chan Result { return p.done }
 
-func (p *Process) Pause() error { return p.control(unix.SIGSTOP) }
+func (p *Process) Pause() error  { return p.control(unix.SIGSTOP) }
 func (p *Process) Resume() error { return p.control(unix.SIGCONT) }
 
 func (p *Process) control(sig unix.Signal) error {

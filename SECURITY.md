@@ -12,9 +12,9 @@ public issue or pull request.
 Check the repository's [Security tab](https://github.com/odbgrowth/saga-watchdog/security)
 for **Report a vulnerability**. If available, use that private reporting flow.
 
-A working private disclosure channel has not been confirmed for the initial
-release. **Maintainer TODO: enable or verify GitHub Private Vulnerability
-Reporting before publishing v0.1.0.** Until then, open a public issue asking for a
+GitHub Private Vulnerability Reporting was disabled when checked on 2026-09-29.
+**Maintainer TODO: enable and verify private reporting before publishing
+v0.1.0.** Until then, open a public issue asking for a
 private contact channel, with no exploit details. There is no invented reporting
 email or promised response time.
 

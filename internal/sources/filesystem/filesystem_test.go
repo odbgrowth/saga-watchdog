@@ -49,7 +49,7 @@ func writeFixture(t *testing.T, root, name, content string) {
 
 func awaitFile(t *testing.T, out <-chan event.Event, failures <-chan error, target string) event.Event {
 	t.Helper()
-	deadline := time.NewTimer(5*time.Second)
+	deadline := time.NewTimer(5 * time.Second)
 	defer deadline.Stop()
 	for {
 		select {
@@ -93,7 +93,7 @@ func TestNewDirectoriesAndAtomicReplacement(t *testing.T) {
 	if err := os.Remove(filepath.Join(root, "new", "nested", "first.go")); err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.NewTimer(5*time.Second)
+	deadline := time.NewTimer(5 * time.Second)
 	defer deadline.Stop()
 	for {
 		select {
@@ -113,7 +113,7 @@ func TestIgnoredTreesAndMandatoryControls(t *testing.T) {
 	root, _, out, failures, _ := startFixture(t, config.Default())
 	writeFixture(t, root, "vendor/ignored.txt", "generated\n")
 	writeFixture(t, root, "visible.txt", "marker\n")
-	deadline := time.NewTimer(5*time.Second)
+	deadline := time.NewTimer(5 * time.Second)
 	defer deadline.Stop()
 	observedMarker := false
 	for !observedMarker {
@@ -153,7 +153,7 @@ func TestCancellationClosesSource(t *testing.T) {
 	cancel()
 	select {
 	case <-source.done:
-	case <-time.After(5*time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("watcher goroutine did not stop after cancellation")
 	}
 	if err := source.Close(); err != nil {

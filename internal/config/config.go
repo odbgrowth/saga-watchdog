@@ -62,8 +62,8 @@ func Default() Config {
 		Run: Run{MaxDuration: 2 * time.Hour, StopGracePeriod: 5 * time.Second},
 		Git: Git{ProtectedBranches: []string{"main", "master"}},
 		Filesystem: Filesystem{
-			Protect: []string{Filename, ".git/config", ".git/hooks/**", ".github/workflows/**", "**/.env", "**/.env.*", "**/credentials*", "**/secrets*", "**/*.pem", "**/*.key"},
-			Ignore: []string{"**/node_modules/**", "**/vendor/**", ".git/objects/**", "**/dist/**", "**/build/**"},
+			Protect:         []string{Filename, ".git/config", ".git/hooks/**", ".github/workflows/**", "**/.env", "**/.env.*", "**/credentials*", "**/secrets*", "**/*.pem", "**/*.key"},
+			Ignore:          []string{"**/node_modules/**", "**/vendor/**", ".git/objects/**", "**/dist/**", "**/build/**"},
 			DeleteThreshold: 100, DeleteWindow: 10 * time.Second,
 		},
 		Escalation: Escalation{Window: 120 * time.Second, WarnAfter: 2, PauseAfter: 3, KillAfter: 5},

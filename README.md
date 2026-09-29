@@ -2,10 +2,6 @@
 
 **Watch what AI agents do, not what they say they did.**
 
-> Development status: this local v0.1 draft has not yet been compiled or tested.
-> Dependency checksums, formatting, validation and the first release are pending.
-> The installation command below requires the implementation to be published.
-
 SAGA Watchdog is a small local supervisor for AI coding agents. It runs as a
 separate process, evaluates deterministic policies, detects escalation in
 observed or reported events, and can pause or terminate the process group it

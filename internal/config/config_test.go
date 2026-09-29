@@ -32,10 +32,10 @@ func TestRejectInvalidConfiguration(t *testing.T) {
 		"deletions": "filesystem:\n  delete_threshold: 0\n", "invalid glob": "filesystem:\n  protect: ['[']\n",
 		"absolute glob": "filesystem:\n  ignore: ['/etc/**']\n", "traversal glob": "filesystem:\n  protect: ['../a']\n",
 		"null": "mode: null\n", "alias": "project: &p\n  name: sample\nrun: *p\n",
-		"network URL": "network:\n  deny: ['https://example.com']\n",
+		"network URL":         "network:\n  deny: ['https://example.com']\n",
 		"network empty label": "network:\n  deny: ['..']\n",
-		"bad branch glob": "git:\n  protected_branches: ['release/[']\n",
-		"oversized": strings.Repeat("# comment\n", 10000),
+		"bad branch glob":     "git:\n  protected_branches: ['release/[']\n",
+		"oversized":           strings.Repeat("# comment\n", 10000),
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := Parse(strings.NewReader(input)); err == nil {

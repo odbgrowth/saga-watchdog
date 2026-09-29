@@ -25,16 +25,16 @@ func TestDecodeRequestsAndRejectOverrides(t *testing.T) {
 		}
 	}
 	for name, input := range map[string]string{
-		"malformed": `{"operation":`,
-		"trailing": `{"operation":"check","event":{"type":"file","action":"write","target":"a"}} {}`,
-		"unknown": `{"operation":"check","allow":true,"event":{"type":"file","action":"write","target":"a"}}`,
-		"override": `{"operation":"check","event":{"type":"file","action":"write","target":"a","ignore_policy":true}}`,
-		"timestamp": `{"operation":"emit","event":{"type":"network","action":"connect","target":"a","timestamp":"2000-01-01"}}`,
-		"check result": `{"operation":"check","event":{"type":"file","action":"write","target":"a","result":"allowed"}}`,
-		"metadata": `{"operation":"emit","event":{"type":"network","action":"connect","target":"a","metadata":{"mode":"observe"}}}`,
-		"control": `{"operation":"resume"}`,
-		"type": `{"operation":"emit","event":{"type":"model-says-safe","action":"allow","target":"a"}}`,
-		"newline": `{"operation":"check","event":{"type":"file","action":"write","target":"a\nb"}}`,
+		"malformed":      `{"operation":`,
+		"trailing":       `{"operation":"check","event":{"type":"file","action":"write","target":"a"}} {}`,
+		"unknown":        `{"operation":"check","allow":true,"event":{"type":"file","action":"write","target":"a"}}`,
+		"override":       `{"operation":"check","event":{"type":"file","action":"write","target":"a","ignore_policy":true}}`,
+		"timestamp":      `{"operation":"emit","event":{"type":"network","action":"connect","target":"a","timestamp":"2000-01-01"}}`,
+		"check result":   `{"operation":"check","event":{"type":"file","action":"write","target":"a","result":"allowed"}}`,
+		"metadata":       `{"operation":"emit","event":{"type":"network","action":"connect","target":"a","metadata":{"mode":"observe"}}}`,
+		"control":        `{"operation":"resume"}`,
+		"type":           `{"operation":"emit","event":{"type":"model-says-safe","action":"allow","target":"a"}}`,
+		"newline":        `{"operation":"check","event":{"type":"file","action":"write","target":"a\nb"}}`,
 		"missing target": `{"operation":"check","event":{"type":"file","action":"write"}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -102,7 +102,7 @@ func TestSocketRequestsPermissionsAndDisconnect(t *testing.T) {
 				t.Fatalf("request altered: %+v", call.Request)
 			}
 			call.Reply <- Response{Allowed: true, Decision: &policy.Decision{Action: "allow", Severity: "info"}}
-		case <-time.After(5*time.Second):
+		case <-time.After(5 * time.Second):
 			t.Fatal("valid request not delivered")
 		}
 		if err := <-response; err != nil {
@@ -122,7 +122,7 @@ func TestSocketRequestsPermissionsAndDisconnect(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer c.Close()
-	c.SetDeadline(time.Now().Add(5*time.Second))
+	c.SetDeadline(time.Now().Add(5 * time.Second))
 	if _, err := c.Write([]byte("{broken-json}\n")); err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,8 @@ func TestSocketRequestsPermissionsAndDisconnect(t *testing.T) {
 	}
 }
 
-type unexpectedResponse struct { response Response }
+type unexpectedResponse struct{ response Response }
+
 func (e *unexpectedResponse) Error() string { return "unexpected policy response" }
 
 func TestConcurrentClientsAndCancelledHandlers(t *testing.T) {
@@ -161,7 +162,7 @@ func TestConcurrentClientsAndCancelledHandlers(t *testing.T) {
 		select {
 		case call := <-calls:
 			call.Reply <- Response{Allowed: true}
-		case <-time.After(5*time.Second):
+		case <-time.After(5 * time.Second):
 			t.Fatal("concurrent request stalled")
 		}
 	}
@@ -180,7 +181,7 @@ func TestConcurrentClientsAndCancelledHandlers(t *testing.T) {
 	}()
 	select {
 	case <-calls:
-	case <-time.After(5*time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("pending request never reached supervisor")
 	}
 	cancel()
@@ -189,7 +190,7 @@ func TestConcurrentClientsAndCancelledHandlers(t *testing.T) {
 		if err == nil {
 			t.Fatal("cancelled request unexpectedly succeeded")
 		}
-	case <-time.After(5*time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("cancelled handler leaked")
 	}
 }

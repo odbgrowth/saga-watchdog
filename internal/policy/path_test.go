@@ -50,7 +50,10 @@ func TestNormalizeSymlinks(t *testing.T) {
 }
 
 func TestGlobMatchingAndIgnores(t *testing.T) {
-	for _, test := range []struct { pattern, target string; want bool }{
+	for _, test := range []struct {
+		pattern, target string
+		want            bool
+	}{
 		{"**/.env", ".env", true}, {"**/.env", "app/.env", true},
 		{".git/hooks/**", ".git/hooks", true}, {".git/hooks/**", ".git/hooks/pre-commit", true},
 		{".git/hooks/**", ".git/hooks-elsewhere/x", false}, {".env.*", ".env.local", true},

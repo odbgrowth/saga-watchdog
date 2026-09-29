@@ -15,7 +15,7 @@ import (
 )
 
 type terminalState struct {
-	file *os.File
+	file  *os.File
 	group int
 	attrs *unix.Termios
 }

@@ -14,7 +14,7 @@ var epoch = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 func TestPoliciesAndPrecedence(t *testing.T) {
 	for _, mode := range []string{"enforce", "observe"} {
 		t.Run(mode, func(t *testing.T) {
-			for _, test := range []struct { target, action, rule string }{
+			for _, test := range []struct{ target, action, rule string }{
 				{"src/main.go", "allow", ""},
 				{".saga-watchdog.yaml", "kill", "policy-tamper"},
 				{".git/config", "pause", "git-security-modification"},
@@ -63,7 +63,7 @@ func TestTargetHoppingAndCredentialSeeking(t *testing.T) {
 			e := New(config.Default(), t.TempDir())
 			e.Evaluate(event.Event{Timestamp: epoch, Type: "network", Action: "connect", Target: "a", Result: "denied"})
 			for i, want := range []string{"warn", "pause"} {
-				d := e.Evaluate(event.Event{Timestamp: epoch.Add(time.Duration(i+1)*time.Second), Type: kind, Action: "attempt", Target: fmt.Sprintf("alternate-%d", i)})
+				d := e.Evaluate(event.Event{Timestamp: epoch.Add(time.Duration(i+1) * time.Second), Type: kind, Action: "attempt", Target: fmt.Sprintf("alternate-%d", i)})
 				if d.Action != want {
 					t.Fatalf("%s continuation: %+v, want %s", kind, d, want)
 				}
@@ -78,13 +78,13 @@ func TestEscalationWindowAndUnrelatedActions(t *testing.T) {
 	if d := e.Evaluate(event.Event{Timestamp: epoch.Add(time.Second), Type: "file", Action: "write", Target: "normal.go"}); d.Action != "allow" {
 		t.Fatalf("unrelated file write escalated: %+v", d)
 	}
-	if d := e.Evaluate(event.Event{Timestamp: epoch.Add(120*time.Second), Type: "credential", Action: "access", Target: "other"}); d.Action != "allow" {
+	if d := e.Evaluate(event.Event{Timestamp: epoch.Add(120 * time.Second), Type: "credential", Action: "access", Target: "other"}); d.Action != "allow" {
 		t.Fatalf("window did not expire: %+v", d)
 	}
 	if len(e.denials) != 0 {
 		t.Fatal("expired history retained")
 	}
-	if d := e.Evaluate(event.Event{Timestamp: epoch.Add(121*time.Second), Type: "network", Action: "connect", Target: "b", Result: "denied"}); d.Action != "allow" {
+	if d := e.Evaluate(event.Event{Timestamp: epoch.Add(121 * time.Second), Type: "network", Action: "connect", Target: "b", Result: "denied"}); d.Action != "allow" {
 		t.Fatalf("first denial after expiry escalated: %+v", d)
 	}
 }
@@ -109,7 +109,7 @@ func TestMassDeletionWindowAndDuplicates(t *testing.T) {
 	if d := e.Evaluate(event.Event{Timestamp: epoch.Add(time.Second), Type: "file", Action: "rename", Target: "c"}); d.Action != "pause" || d.RuleID != "mass-deletion" {
 		t.Fatalf("burst not detected: %+v", d)
 	}
-	if d := e.Evaluate(event.Event{Timestamp: epoch.Add(12*time.Second), Type: "file", Action: "delete", Target: "d"}); d.Action != "allow" {
+	if d := e.Evaluate(event.Event{Timestamp: epoch.Add(12 * time.Second), Type: "file", Action: "delete", Target: "d"}); d.Action != "allow" {
 		t.Fatalf("deletion window did not expire: %+v", d)
 	}
 	if len(e.deletions) != 1 {

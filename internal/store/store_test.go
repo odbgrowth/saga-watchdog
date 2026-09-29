@@ -103,7 +103,7 @@ func TestJSONLAuditRedactsSecretsAndKeepsPrivatePermissions(t *testing.T) {
 	_, s, r := storeFixture(t)
 	input := event.Event{
 		ID: "event_one", RunID: r.ID, Source: "integration", Type: "network", Action: "connect",
-		Target: "https://fixture-user:fixture-password@example.invalid/path?token=fixture-query-secret",
+		Target:   "https://fixture-user:fixture-password@example.invalid/path?token=fixture-query-secret",
 		Metadata: map[string]any{"reason": "ghp_fixture1234567890123456", "count": 7, "source_code": "UNWANTED_SOURCE_BODY"},
 	}
 	if err := s.Append(input); err != nil {
