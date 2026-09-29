@@ -1,0 +1,22 @@
+# Binaries and test artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage.*
+*.coverprofile
+profile.cov
+/saga-watchdog
+/dist/
+
+# Go workspace files
+go.work
+go.work.sum
+
+# Local secrets and state
+.env
+.env.*
+.saga-state/
