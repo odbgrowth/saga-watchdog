@@ -10,14 +10,12 @@ for a sensitive workload.
 Do not put exploitable security details, credentials, or private event logs in a
 public issue or pull request.
 
-Check the repository's [Security tab](https://github.com/odbgrowth/saga-watchdog/security)
-for **Report a vulnerability**. If available, use that private reporting flow.
-
-GitHub Private Vulnerability Reporting was disabled when checked on 2026-09-29.
-**Maintainer TODO: enable and verify private reporting before publishing
-v0.1.0.** Until then, open a public issue asking for a
-private contact channel, with no exploit details. There is no invented reporting
-email or promised response time.
+Use [GitHub private vulnerability reporting](https://github.com/odbgrowth/saga-watchdog/security/advisories/new).
+This is enabled for the repository and requires a GitHub account. Reports are
+shared with repository maintainers rather than posted as public issues.
+If the reporting form is unavailable, open an issue asking for a private
+contact channel without including vulnerability details. No response-time
+commitment is made.
 
 A private report should include the affected version and OS, a minimal
 reproduction, the expected policy decision, the observed behavior, and the
@@ -25,10 +23,10 @@ security impact. Redact all real secrets and unrelated project data.
 
 ## Supported versions
 
-During v0.1 development, fixes target the current development branch. After the
-first tagged release, only the latest v0.1.x patch release is supported. Older
-patch releases should be upgraded; no backport or response-time commitment is
-made. Windows process supervision is not supported.
+There are no tagged releases yet. Fixes target `main`; use a reviewed commit
+when testing or deploying the development version. A version-support policy will
+be published with the first release. There is currently no maintained release
+branch or backport commitment. Native Windows supervision is unsupported.
 
 ## Security scope
 
