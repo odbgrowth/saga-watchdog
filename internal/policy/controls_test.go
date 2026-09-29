@@ -62,7 +62,10 @@ func TestProtectedSymlinkNamesRetainTheirRules(t *testing.T) {
 		{"settings/locked.yml", "protected-path"},
 	} {
 		t.Run(tc.path, func(t *testing.T) {
-			root := t.TempDir()
+			root, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
 			ordinary := filepath.Join(root, "ordinary.txt")
 			if err := os.WriteFile(ordinary, []byte("ordinary"), 0600); err != nil {
 				t.Fatal(err)
