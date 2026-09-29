@@ -1,0 +1,10 @@
+# Separate from .saga-watchdog.yaml. Replace the ID before validating.
+version: 1
+mode: observe
+socket: /var/run/docker.sock
+state_dir: /var/lib/saga-watchdog/docker
+poll_interval: 10s
+request_timeout: 5s
+targets:
+  - name: booking-agent
+    container_id: REPLACE_WITH_FULL_CONTAINER_ID

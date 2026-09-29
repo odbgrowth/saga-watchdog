@@ -1,0 +1,24 @@
+[Unit]
+Description=SAGA Watchdog Docker observer
+After=docker.service
+
+[Service]
+Type=simple
+User=saga-watchdog
+Group=saga-watchdog
+SupplementaryGroups=docker
+ExecStart=/usr/local/bin/saga-watchdog docker watch --config /etc/saga-watchdog/docker.yaml
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=20s
+StateDirectory=saga-watchdog/docker
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+RestrictAddressFamilies=AF_UNIX
+
+[Install]
+WantedBy=multi-user.target
