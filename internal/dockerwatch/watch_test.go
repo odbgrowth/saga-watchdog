@@ -3,12 +3,14 @@ package dockerwatch
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -70,7 +72,7 @@ func TestPollReportsMissingUnknownAndResourceFailures(t *testing.T) {
 				}
 				fmt.Fprintf(w, `{"Id":%q,"State":{"Status":"running"}}`, testID)
 			})
-			s, _ := poll(context.Background(), c, []Target{{Name: "agent", ID: testID}}, []*Stats{nil})
+			s, _ := poll(context.Background(), c, []Target{{Name: "agent", ID: testID}}, []*resourceSample{nil})
 			if s[0].Availability != tc.availability || s[0].Resources != nil {
 				t.Fatalf("%+v", s[0])
 			}
@@ -89,7 +91,7 @@ func TestCPUSamplesAndCounterReset(t *testing.T) {
 		}
 		fmt.Fprintf(w, `{"id":%q,"read":"2026-09-29T09:00:00Z","cpu_stats":{"cpu_usage":{"total_usage":300},"system_cpu_usage":2000,"online_cpus":2}}`, testID)
 	})
-	p := &Stats{}
+	p := &resourceSample{}
 	p.CPU.Usage.Total = 200
 	p.CPU.System = 1000
 	s, _ := inspectTarget(context.Background(), c, "/v1.56", Target{ID: testID}, p)
@@ -100,6 +102,93 @@ func TestCPUSamplesAndCounterReset(t *testing.T) {
 	s, _ = inspectTarget(context.Background(), c, "/v1.56", Target{ID: testID}, p)
 	if s.Resources.CPUPercent != nil {
 		t.Fatal("counter reset produced misleading CPU sample")
+	}
+}
+
+func TestCPUBaselineIsReplacedAfterRestart(t *testing.T) {
+	restarts, total, system := 2, 300, 2000
+	c := fixtureClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/version":
+			fmt.Fprint(w, `{"ApiVersion":"1.56"}`)
+		case strings.HasSuffix(r.URL.Path, "/json"):
+			fmt.Fprintf(w, `{"Id":%q,"RestartCount":%d,"State":{"Status":"running"}}`, testID, restarts)
+		case strings.HasSuffix(r.URL.Path, "/stats"):
+			fmt.Fprintf(w, `{"id":%q,"read":"2026-09-29T09:00:00Z","cpu_stats":{"cpu_usage":{"total_usage":%d},"system_cpu_usage":%d,"online_cpus":2}}`, testID, total, system)
+		default:
+			t.Error(r.URL.Path)
+			w.WriteHeader(404)
+		}
+	})
+	targets := []Target{{Name: "agent", ID: testID}}
+	_, previous := poll(context.Background(), c, targets, []*resourceSample{nil})
+	// A restarted workload can exceed the old CPU total before the next poll.
+	restarts, total, system = 3, 400, 3000
+	statuses, next := poll(context.Background(), c, targets, previous)
+	if statuses[0].Resources == nil || statuses[0].Resources.CPUPercent != nil || next[0].RestartCount != 3 {
+		t.Fatalf("cross-restart CPU sample was used: %+v", statuses[0])
+	}
+	total, system = 500, 4000
+	statuses, _ = poll(context.Background(), c, targets, next)
+	if statuses[0].Resources.CPUPercent == nil || *statuses[0].Resources.CPUPercent != 20 {
+		t.Fatalf("CPU did not resume with the new baseline: %+v", statuses[0].Resources)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestStreamBackoffRequiresAHealthyConnection(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		want []time.Duration
+	}{
+		{"empty", []time.Duration{1, 2, 4, 8, 16, 30, 30}},
+		{"event", []time.Duration{1, 2, 1, 2}},
+		{"idle", []time.Duration{1, 2, 31, 2}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				var attempts []time.Time
+				transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+					if r.Method != http.MethodGet {
+						t.Fatalf("unexpected mutation: %s", r.Method)
+					}
+					body := io.NopCloser(strings.NewReader(`{"ApiVersion":"1.56"}`))
+					if strings.HasSuffix(r.URL.Path, "/events") {
+						attempts = append(attempts, time.Now())
+						body = io.NopCloser(strings.NewReader(""))
+						if len(attempts) == 3 {
+							switch tc.name {
+							case "event":
+								body = io.NopCloser(strings.NewReader(fmt.Sprintf("{\"Type\":\"container\",\"Action\":\"oom\",\"Actor\":{\"ID\":%q}}\n", testID)))
+							case "idle":
+								reader, writer := io.Pipe()
+								body = reader
+								go func() { time.Sleep(30 * time.Second); writer.Close() }()
+							}
+						}
+						if len(attempts) > len(tc.want) {
+							cancel()
+						}
+					}
+					return &http.Response{StatusCode: http.StatusOK, Body: body, Header: make(http.Header)}, nil
+				})
+				c := &Client{http: &http.Client{Transport: transport}, base: "http://docker", timeout: time.Second}
+				stream(ctx, c, []string{testID}, make(chan streamMessage, 64))
+				if len(attempts) != len(tc.want)+1 {
+					t.Fatalf("unexpected connection attempts: %d", len(attempts))
+				}
+				for n, want := range tc.want {
+					if got := attempts[n+1].Sub(attempts[n]); got != want*time.Second {
+						t.Errorf("reconnect %d waited %v, want %v", n+1, got, want*time.Second)
+					}
+				}
+			})
+		})
 	}
 }
 

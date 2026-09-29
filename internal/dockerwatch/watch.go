@@ -81,9 +81,15 @@ func stream(ctx context.Context, c *Client, ids []string, ch chan<- streamMessag
 	for ctx.Err() == nil {
 		api, err := c.Version(ctx)
 		if err == nil {
-			err = c.Events(ctx, api, ids, func() { backoff = time.Second; send(streamMessage{state: "connected"}) }, func(e DockerEvent) error {
+			var connectedAt time.Time
+			received := false
+			err = c.Events(ctx, api, ids, func() {
+				connectedAt = time.Now()
+				send(streamMessage{state: "connected"})
+			}, func(e DockerEvent) error {
 				select {
 				case ch <- streamMessage{event: &e}:
+					received = true
 					return nil
 				case <-ctx.Done():
 					return ctx.Err()
@@ -91,6 +97,11 @@ func stream(ctx context.Context, c *Client, ids []string, ch chan<- streamMessag
 					return errors.New("event queue full; some events may be missing")
 				}
 			})
+			// A successful HTTP handshake alone may immediately end in EOF.
+			// Reset only after useful events or a sustained (possibly idle) stream.
+			if received || (!connectedAt.IsZero() && time.Since(connectedAt) >= 30*time.Second) {
+				backoff = time.Second
+			}
 		}
 		if ctx.Err() != nil || !send(streamMessage{state: "disconnected", err: err}) {
 			return
@@ -122,7 +133,12 @@ func safeError(err error) string {
 	return s
 }
 
-func inspectTarget(ctx context.Context, c *Client, api string, t Target, previous *Stats) (TargetStatus, *Stats) {
+type resourceSample struct {
+	Stats
+	RestartCount int
+}
+
+func inspectTarget(ctx context.Context, c *Client, api string, t Target, previous *resourceSample) (TargetStatus, *resourceSample) {
 	s := TargetStatus{Target: t, Availability: "unknown", State: "unknown", Health: "unknown"}
 	i, err := c.Inspect(ctx, api, t.ID)
 	if err != nil {
@@ -162,7 +178,7 @@ func inspectTarget(ctx context.Context, c *Client, api string, t Target, previou
 		return s, nil
 	}
 	r := &Resources{At: stats.Read.UTC(), MemoryBytes: stats.Memory.Usage, MemoryLimitBytes: stats.Memory.Limit}
-	if previous != nil && stats.CPU.System > previous.CPU.System && stats.CPU.Usage.Total >= previous.CPU.Usage.Total {
+	if previous != nil && previous.RestartCount == s.RestartCount && stats.CPU.System > previous.CPU.System && stats.CPU.Usage.Total >= previous.CPU.Usage.Total {
 		cpus := stats.CPU.Online
 		if cpus == 0 {
 			cpus = uint64(len(stats.CPU.Usage.PerCPU))
@@ -173,12 +189,12 @@ func inspectTarget(ctx context.Context, c *Client, api string, t Target, previou
 		}
 	}
 	s.Resources = r
-	return s, &stats
+	return s, &resourceSample{Stats: stats, RestartCount: s.RestartCount}
 }
 
-func poll(ctx context.Context, c *Client, targets []Target, previous []*Stats) ([]TargetStatus, []*Stats) {
+func poll(ctx context.Context, c *Client, targets []Target, previous []*resourceSample) ([]TargetStatus, []*resourceSample) {
 	out := make([]TargetStatus, len(targets))
-	next := make([]*Stats, len(targets))
+	next := make([]*resourceSample, len(targets))
 	api, err := c.Version(ctx)
 	if err != nil {
 		for n, t := range targets {
@@ -236,7 +252,7 @@ func Run(ctx context.Context, cfg Config, client *Client, once bool) (err error)
 		}
 		err = errors.Join(err, audit("observer-stop", "observer", s.Observer, "info", "selected containers were not modified"), save())
 	}()
-	var previous = make([]*Stats, len(cfg.Targets))
+	var previous = make([]*resourceSample, len(cfg.Targets))
 	refresh := func() error {
 		var next []TargetStatus
 		next, previous = poll(ctx, client, cfg.Targets, previous)
