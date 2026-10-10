@@ -362,6 +362,14 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 				}
 			case "check", "emit":
 				e := event.Event{Source: "integration", Type: request.Event.Type, Action: request.Event.Action, Target: request.Event.Target, Result: request.Event.Result, Timestamp: time.Now().UTC()}
+				// Lineage is a producer claim kept for correlation; the source stays
+				// "integration" so audit readers see the evidence class, not a name.
+				for key, value := range request.Event.Lineage() {
+					if e.Metadata == nil {
+						e.Metadata = map[string]any{}
+					}
+					e.Metadata[key] = value
+				}
 				pausedCheck := r.Status == "paused" && request.Operation == "check"
 				if pausedCheck {
 					e.Result = "denied"

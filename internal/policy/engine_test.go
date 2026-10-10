@@ -138,3 +138,40 @@ func TestSnapshotAndNetworkPolicy(t *testing.T) {
 		t.Fatal("network policy used suffix rather than exact matching")
 	}
 }
+
+func TestRelatedFollowUpsCountOncePerTarget(t *testing.T) {
+	e := New(config.Default(), t.TempDir())
+	at := func(i int) time.Time { return epoch.Add(time.Duration(i) * time.Second) }
+	if d := e.Evaluate(event.Event{Timestamp: at(0), Type: "network", Action: "connect", Target: "denied.example", Result: "denied"}); d.Action != "allow" || d.RuleID != "denial-observed" {
+		t.Fatalf("first denial: %+v", d)
+	}
+	// Repeating the same allowed tool is ordinary work; it is counted once.
+	for i, want := range []string{"warn", "allow", "allow"} {
+		if d := e.Evaluate(event.Event{Timestamp: at(i + 1), Type: "tool", Action: "call", Target: "Bash"}); d.Action != want {
+			t.Fatalf("repeated tool %d: %+v, want %s", i, d, want)
+		}
+	}
+	// A different tool target is an alternative and counts.
+	if d := e.Evaluate(event.Event{Timestamp: at(5), Type: "tool", Action: "call", Target: "mcp__github__search"}); d.Action != "pause" {
+		t.Fatalf("alternate tool: %+v", d)
+	}
+	// Repeated allowed network use of one host after a network denial counts once.
+	e = New(config.Default(), t.TempDir())
+	e.Evaluate(event.Event{Timestamp: at(0), Type: "network", Action: "connect", Target: "a", Result: "denied"})
+	for i, want := range []string{"warn", "allow", "pause"} {
+		target := "b"
+		if i == 2 {
+			target = "c"
+		}
+		if d := e.Evaluate(event.Event{Timestamp: at(i + 1), Type: "network", Action: "connect", Target: target}); d.Action != want {
+			t.Fatalf("network follow-up %d: %+v, want %s", i, d, want)
+		}
+	}
+	// A repeated denial always counts.
+	e = New(config.Default(), t.TempDir())
+	for i, want := range []string{"allow", "warn", "pause"} {
+		if d := e.Evaluate(event.Event{Timestamp: at(i), Type: "tool", Action: "call", Target: "same", Result: "denied"}); d.Action != want {
+			t.Fatalf("repeated denial %d: %+v, want %s", i, d, want)
+		}
+	}
+}

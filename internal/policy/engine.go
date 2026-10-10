@@ -31,17 +31,21 @@ type observation struct {
 type Engine struct {
 	cfg       config.Config
 	root      string
+	controls  []string
 	last      time.Time
 	denials   []observation
 	deletions []observation
 }
 
-func New(cfg config.Config, root string) *Engine {
+// New builds an engine for one run. controls are project-relative files that
+// configure an active preventive integration (for example the Claude Code hook
+// settings). Changing one during the run is treated like policy tampering.
+func New(cfg config.Config, root string, controls ...string) *Engine {
 	cfg.Git.ProtectedBranches = append([]string(nil), cfg.Git.ProtectedBranches...)
 	cfg.Filesystem.Protect = append([]string(nil), cfg.Filesystem.Protect...)
 	cfg.Filesystem.Ignore = append([]string(nil), cfg.Filesystem.Ignore...)
 	cfg.Network.Deny = append([]string(nil), cfg.Network.Deny...)
-	return &Engine{cfg: cfg, root: root}
+	return &Engine{cfg: cfg, root: root, controls: append([]string(nil), controls...)}
 }
 
 func decide(action, rule, reason string) Decision {
@@ -123,6 +127,11 @@ func (e *Engine) file(ev event.Event, now time.Time) Decision {
 		return decide("kill", "policy-tamper", "project root containing active policy was removed or renamed")
 	}
 	for _, name := range []string{lexical, target} {
+		for _, control := range e.controls {
+			if name == control {
+				return decide("kill", "hook-tamper", control+" configures an active preventive integration and changed during the run")
+			}
+		}
 		if name == ".git" || name == ".git/config" || Match(".git/hooks/**", name) {
 			return decide("pause", "git-security-modification", "Git security configuration changed")
 		}
@@ -163,15 +172,21 @@ func (e *Engine) escalate(ev event.Event, now time.Time, denied bool) Decision {
 	if !count && len(e.denials) > 0 {
 		// Credential or alternate tool attempts following a denial are explicit
 		// observable signals. Network/git retries must share a prior category.
-		if ev.Type == "credential" || ev.Type == "tool" {
-			count = true
-		} else if ev.Type == "network" || ev.Type == "git" {
-			for _, prior := range e.denials {
-				if prior.typeID == ev.Type {
-					count = true
-					break
+		// A follow-up only counts once per distinct target: repeating the same
+		// allowed operation is ordinary work, not an alternative target.
+		related, repeated := false, false
+		for _, prior := range e.denials {
+			if prior.typeID == ev.Type {
+				related = true
+				if prior.target == ev.Target {
+					repeated = true
 				}
 			}
+		}
+		if ev.Type == "credential" || ev.Type == "tool" {
+			count = !repeated
+		} else if ev.Type == "network" || ev.Type == "git" {
+			count = related && !repeated
 		}
 	}
 	if !count {
