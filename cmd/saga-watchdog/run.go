@@ -14,6 +14,7 @@ import (
 	"github.com/odbgrowth/saga-watchdog/internal/config"
 	"github.com/odbgrowth/saga-watchdog/internal/event"
 	"github.com/odbgrowth/saga-watchdog/internal/gitinfo"
+	"github.com/odbgrowth/saga-watchdog/internal/integrations/claudecode"
 	"github.com/odbgrowth/saga-watchdog/internal/policy"
 	"github.com/odbgrowth/saga-watchdog/internal/sources/filesystem"
 	"github.com/odbgrowth/saga-watchdog/internal/sources/socket"
@@ -81,6 +82,14 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 	if err != nil || currentHash != hash {
 		return finish("failed", "policy changed during startup", 125)
 	}
+	// Settings files that run the SAGA hook configure a preventive integration
+	// for this run. They are fingerprinted now, after the observer is live, and
+	// protected like the policy file until the run ends.
+	r.Controls = claudecode.Controls(g.Root)
+	controlsDigest := make(map[string]string, len(r.Controls))
+	for _, name := range r.Controls {
+		controlsDigest[name] = claudecode.Digest(g.Root, []string{name})
+	}
 	env := make([]string, 0, len(os.Environ())+2)
 	for _, v := range os.Environ() {
 		if !strings.HasPrefix(v, "SAGA_WATCHDOG_SOCKET=") && !strings.HasPrefix(v, "SAGA_WATCHDOG_RUN_ID=") {
@@ -106,7 +115,7 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 	}
 	defer stopAndWait()
 	r.Status = "running"
-	engine := policy.New(c, g.Root)
+	engine := policy.New(c, g.Root, r.Controls...)
 	record := func(e event.Event, d policy.Decision) error {
 		e.ID = event.NewID("evt")
 		e.RunID = r.ID
@@ -140,7 +149,11 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 		stopAndWait()
 		return finish("failed", err.Error(), 125)
 	}
-	fmt.Fprintf(os.Stderr, "SAGA Watchdog %s\nProject  %s\nRun      %s\nMode     %s\nBranch   %s\nPolicy   %s\nStarting %s\n", version, event.Redact(name), r.ID, c.Mode, event.Redact(g.Branch), hash[:12], event.Redact(r.Agent))
+	hooks := "none (supervision and observation only)"
+	if len(r.Controls) > 0 {
+		hooks = "claude-code via " + strings.Join(r.Controls, ", ")
+	}
+	fmt.Fprintf(os.Stderr, "SAGA Watchdog %s\nProject  %s\nRun      %s\nMode     %s\nBranch   %s\nPolicy   %s\nHooks    %s\nStarting %s\n", version, event.Redact(name), r.ID, c.Mode, event.Redact(g.Branch), hash[:12], hooks, event.Redact(r.Agent))
 	timeout := time.NewTimer(c.Run.MaxDuration)
 	defer timeout.Stop()
 	tick := time.NewTicker(time.Second)
@@ -247,6 +260,12 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 			if _, after, err := load(g.Root); err != nil || after != hash {
 				if !stopping {
 					handle(event.Event{Source: "supervisor", Type: "policy", Action: "tamper", Target: config.Filename, Result: "success"})
+				}
+			}
+			for _, name := range r.Controls {
+				// The watcher can miss a notification; the fingerprint cannot.
+				if !stopping && claudecode.Digest(g.Root, []string{name}) != controlsDigest[name] {
+					handle(event.Event{Source: "supervisor", Type: "file", Action: "write", Target: name, Result: "success"})
 				}
 			}
 			status := "completed"
@@ -379,6 +398,13 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 					d = policy.Decision{Action: "pause", RuleID: "run-paused", Reason: "run is paused; explicit resume required", Severity: "high"}
 				}
 				allowed := permits(c.Mode, d) && !pausedCheck
+				// The decision above used the submitted path. Record an absolute
+				// in-project path by its project-relative name for readability.
+				if e.Type == "file" && filepath.IsAbs(e.Target) {
+					if rel, err := filepath.Rel(g.Root, e.Target); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+						e.Target = filepath.ToSlash(rel)
+					}
+				}
 				if request.Operation == "check" {
 					if allowed {
 						e.Result = "allowed"
