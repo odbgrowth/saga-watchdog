@@ -197,3 +197,45 @@ func TestDigestVersionAndSettingsShape(t *testing.T) {
 		}
 	}
 }
+
+func TestReadObjectRejectsNullSymlinkedParentAndAsyncHooks(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".claude"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, ".claude", "settings.json")
+	if err := os.WriteFile(path, []byte("null"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Setup(path); err == nil {
+		t.Fatal("null settings merged")
+	}
+	if s := Inspect(root)[0]; s.Err == nil || s.Configured {
+		t.Fatalf("null settings inspected as valid: %+v", s)
+	}
+	async := `{"hooks":{"PreToolUse":[{"matcher":"` + Matcher + `","hooks":[{"type":"command","command":"` + Command + `","onFailure":"block","async":true}]}]}}`
+	if err := os.WriteFile(path, []byte(async), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if s := Inspect(root)[0]; !s.Configured || s.Preventive {
+		t.Fatalf("background hook counted as preventive: %+v", s)
+	}
+	outside := t.TempDir()
+	target := filepath.Join(outside, "settings.json")
+	if err := os.WriteFile(target, []byte("{}"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	linked := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(linked, ".claude")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if _, err := Setup(filepath.Join(linked, ".claude", "settings.json")); err == nil {
+		t.Fatal("setup wrote through a symlinked .claude directory")
+	}
+	if data, _ := os.ReadFile(target); string(data) != "{}" {
+		t.Fatalf("file outside the project modified: %s", data)
+	}
+	if s := Inspect(linked)[0]; s.Err == nil || s.Configured {
+		t.Fatalf("symlinked .claude inspected as valid: %+v", s)
+	}
+}

@@ -50,6 +50,11 @@ func SettingsJSON() []byte {
 }
 
 func readObject(path string) (map[string]any, os.FileMode, error) {
+	// A symlinked .claude directory would let setup write, and the observer
+	// miss, a file outside the project such as ~/.claude/settings.json.
+	if info, err := os.Lstat(filepath.Dir(path)); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return nil, 0, fmt.Errorf("%s: parent directory must be a real directory, not a symlink", path)
+	}
 	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return map[string]any{}, 0600, nil
@@ -80,6 +85,9 @@ func readObject(path string) (map[string]any, os.FileMode, error) {
 	d.UseNumber()
 	if err := d.Decode(&obj); err != nil {
 		return nil, 0, fmt.Errorf("%s is not a JSON object: %w", path, err)
+	}
+	if obj == nil {
+		return nil, 0, fmt.Errorf("%s is not a JSON object: null", path)
 	}
 	if d.More() {
 		return nil, 0, fmt.Errorf("%s must contain one JSON object", path)
@@ -195,7 +203,8 @@ func Inspect(root string) []Status {
 			list, _ := group["hooks"].([]any)
 			for _, h := range list {
 				hook, _ := h.(map[string]any)
-				if hook["command"] == Command && hook["onFailure"] == "block" && group["matcher"] == Matcher {
+				// A background (async) hook cannot block, so it is not preventive.
+				if hook["command"] == Command && hook["type"] == "command" && hook["onFailure"] == "block" && hook["async"] != true && group["matcher"] == Matcher {
 					s.Preventive = true
 				}
 			}

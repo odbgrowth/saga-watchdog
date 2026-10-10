@@ -61,7 +61,7 @@ Verified against the official hooks reference and Claude Code 2.1.296 on
 | Contract | What SAGA uses |
 | --- | --- |
 | Events | `PreToolUse` (check), `PostToolUse` and `PostToolUseFailure` (report), `ConfigChange` (settings tampering). |
-| Input | JSON on stdin with `hook_event_name`, `session_id`, `cwd`, `tool_name`, `tool_input`, `tool_use_id`; `agent_id` and `agent_type` only inside subagents; `source` and `file_path` on `ConfigChange`. |
+| Input | JSON on stdin with `hook_event_name`, `session_id`, `cwd`, `tool_name`, `tool_input`, `tool_use_id`; `agent_id` and `agent_type` only inside subagents; `source` and `file_path` on `ConfigChange`. `file_path` is optional in the contract; SAGA refuses a `ConfigChange` without it instead of guessing a path from the hook's working directory. |
 | Fields read from `tool_input` | `file_path` (Write, Edit, MultiEdit), `notebook_path` (NotebookEdit), `url` (WebFetch). Nothing else is read. File paths arrive absolute. |
 | Blocking | Exit code 2 blocks a `PreToolUse` tool call or a `ConfigChange`; stderr is shown to Claude. Exit 0 with no output leaves the call to Claude's normal permission flow. Exit 2 wins even if another hook answers `allow`. |
 | Failure default | A hook that times out, crashes or prints malformed JSON is non-blocking unless the hook sets `onFailure: "block"`. SAGA sets it on `PreToolUse` and `ConfigChange`. |
@@ -112,9 +112,13 @@ This prints four hook groups, each running `saga-watchdog claude hook` with a
 | `PostToolUseFailure` | same | not applicable |
 | `ConfigChange` | `project_settings\|local_settings` | `block` |
 
-`setup` refuses to touch a settings file that is not a JSON object, is a
-symlink, or has a `hooks` value that is not an object. Fix those by hand and
-run it again. User-level `~/.claude/settings.json` is never modified.
+`setup` refuses to touch a settings file that is not a JSON object (including
+`null`), is a symlink, sits in a symlinked `.claude` directory, or has a
+`hooks` value that is not an object. Fix those by hand and run it again.
+User-level `~/.claude/settings.json` is never modified. `doctor` counts the
+hook as preventive only when it is a synchronous command hook with the
+expected matcher and `onFailure: "block"`; a background (`async`) hook cannot
+block and is reported as not preventive.
 
 Prefer the project file. Claude Code saves "always allow" permission rules
 to `.claude/settings.local.json` during a session. With the hook in the
@@ -221,6 +225,7 @@ Two layers, both required for the explicitly configured preventive hook:
 | Run ID mismatch (socket from another run) | n/a | exit 2 |
 | Response without a decision, or a protocol error | n/a | exit 2 |
 | Hook input not JSON, over 16 MiB, or without a usable path or host | n/a | exit 2; the payload is never echoed |
+| `ConfigChange` without `file_path` | n/a | exit 2; the settings change is not applied |
 | Run paused | n/a | exit 2 (`run-paused`) until resumed |
 
 The message in that case is:

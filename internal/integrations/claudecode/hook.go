@@ -11,7 +11,6 @@ import (
 	"io"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/odbgrowth/saga-watchdog/internal/event"
@@ -59,7 +58,7 @@ type toolFields struct {
 // Normalize maps one hook event to a socket request. skip reports an event
 // SAGA does not evaluate; err reports input that cannot be interpreted safely.
 // The error text never contains tool arguments.
-func Normalize(in Input, cwd string) (request socket.Request, skip bool, err error) {
+func Normalize(in Input) (request socket.Request, skip bool, err error) {
 	result := ""
 	switch in.HookEventName {
 	case "PreToolUse":
@@ -69,23 +68,20 @@ func Normalize(in Input, cwd string) (request socket.Request, skip bool, err err
 	case "PostToolUseFailure":
 		request.Operation, result = "emit", "failed"
 	case "ConfigChange":
-		// A project or local settings change is reported as a write to that
-		// file. The policy engine decides: kill when the file carries the SAGA
-		// hook, pause for the sibling settings file while the hook is active.
-		var target string
-		switch in.Source {
-		case "project_settings":
-			target = filepath.Join(cwd, ".claude", "settings.json")
-		case "local_settings":
-			target = filepath.Join(cwd, ".claude", "settings.local.json")
-		default:
+		// A project or local settings change is reported as a write to the
+		// file Claude names. The policy engine decides: kill when that file
+		// carries the SAGA hook, pause for the sibling settings file while the
+		// hook is active. Without an authoritative path the change cannot be
+		// placed in the project, so it is refused rather than guessed from the
+		// hook's working directory.
+		if in.Source != "project_settings" && in.Source != "local_settings" {
 			return request, true, nil
 		}
-		if in.FilePath != "" {
-			target = in.FilePath
+		if in.FilePath == "" {
+			return request, false, errors.New("ConfigChange carries no file_path")
 		}
 		request.Operation = "check"
-		request.Event = socket.Input{Type: "file", Action: "write", Target: target, Producer: Producer, SessionID: identifier(in.SessionID)}
+		request.Event = socket.Input{Type: "file", Action: "write", Target: in.FilePath, Producer: Producer, SessionID: identifier(in.SessionID)}
 		return request, false, nil
 	default:
 		return request, true, nil
@@ -151,8 +147,8 @@ func identifier(s string) string {
 
 // Options wires the adapter to its environment. Send defaults to socket.Send.
 type Options struct {
-	Socket, RunID, Cwd string
-	Send               func(string, socket.Request) (socket.Response, error)
+	Socket, RunID string
+	Send          func(string, socket.Request) (socket.Response, error)
 }
 
 // Run reads one hook event from stdin and answers Claude Code. It returns the
@@ -175,7 +171,7 @@ func Run(stdin io.Reader, stdout, stderr io.Writer, opts Options) int {
 		// The payload is never echoed: it may hold file contents or secrets.
 		return block("hook input is not valid JSON")
 	}
-	request, skip, err := Normalize(in, opts.Cwd)
+	request, skip, err := Normalize(in)
 	if skip {
 		return 0
 	}
@@ -229,6 +225,5 @@ func Run(stdin io.Reader, stdout, stderr io.Writer, opts Options) int {
 
 // Main runs the adapter against the process environment and standard streams.
 func Main() int {
-	cwd, _ := os.Getwd()
-	return Run(os.Stdin, os.Stdout, os.Stderr, Options{Socket: os.Getenv("SAGA_WATCHDOG_SOCKET"), RunID: os.Getenv("SAGA_WATCHDOG_RUN_ID"), Cwd: cwd})
+	return Run(os.Stdin, os.Stdout, os.Stderr, Options{Socket: os.Getenv("SAGA_WATCHDOG_SOCKET"), RunID: os.Getenv("SAGA_WATCHDOG_RUN_ID")})
 }

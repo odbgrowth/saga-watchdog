@@ -15,8 +15,6 @@ import (
 	"github.com/odbgrowth/saga-watchdog/internal/sources/socket"
 )
 
-const cwd = "/project"
-
 func pre(tool, input string) string {
 	return `{"hook_event_name":"PreToolUse","session_id":"sess-1","cwd":"/project","permission_mode":"default","tool_name":"` + tool + `","tool_input":` + input + `,"tool_use_id":"toolu_1"}`
 }
@@ -32,27 +30,26 @@ func parse(t *testing.T, raw string) Input {
 
 func TestNormalizeMapping(t *testing.T) {
 	for name, tc := range map[string]struct{ raw, op, typ, action, target, result string }{
-		"write":         {pre("Write", `{"file_path":"/project/src/a.go","content":"BODY"}`), "check", "file", "write", "/project/src/a.go", ""},
-		"edit":          {pre("Edit", `{"file_path":"/project/.env","old_string":"a","new_string":"b","replace_all":false}`), "check", "file", "write", "/project/.env", ""},
-		"multiedit":     {pre("MultiEdit", `{"file_path":"/project/x","edits":[{"old_string":"a","new_string":"b"}]}`), "check", "file", "write", "/project/x", ""},
-		"notebook":      {pre("NotebookEdit", `{"notebook_path":"/project/n.ipynb","new_source":"x","cell_id":"c"}`), "check", "file", "write", "/project/n.ipynb", ""},
-		"outside":       {pre("Write", `{"file_path":"/etc/passwd"}`), "check", "file", "write", "/etc/passwd", ""},
-		"fetch":         {pre("WebFetch", `{"url":"https://User:PW@API.Example.com:8443/p?token=Q#f","prompt":"p"}`), "check", "network", "connect", "api.example.com", ""},
-		"bash":          {pre("Bash", `{"command":"rm -rf /","description":"x","timeout":1000}`), "check", "process", "execute", "Bash", ""},
-		"mcp":           {pre("mcp__github__get_issue", `{"owner":"o","repo":"r"}`), "check", "tool", "call", "github/get_issue", ""},
-		"mcp-plugin":    {pre("mcp__plugin_my-plugin_db__query", `{}`), "check", "tool", "call", "plugin_my-plugin_db/query", ""},
-		"mcp-odd":       {pre("mcp__broken", `{}`), "check", "tool", "call", "mcp__broken", ""},
-		"unknown":       {pre("FooBar", `{"anything":"x"}`), "check", "tool", "call", "FooBar", ""},
-		"no-input":      {`{"hook_event_name":"PreToolUse","tool_name":"Bash"}`, "check", "process", "execute", "Bash", ""},
-		"post":          {strings.Replace(pre("Write", `{"file_path":"/project/a"}`), "PreToolUse", "PostToolUse", 1), "emit", "file", "write", "/project/a", "success"},
-		"failure":       {strings.Replace(pre("Bash", `{"command":"x"}`), "PreToolUse", "PostToolUseFailure", 1), "emit", "process", "execute", "Bash", "failed"},
-		"config":        {`{"hook_event_name":"ConfigChange","source":"project_settings","file_path":"/project/.claude/settings.json"}`, "check", "file", "write", "/project/.claude/settings.json", ""},
-		"config-sub":    {`{"hook_event_name":"ConfigChange","source":"local_settings","file_path":"/project/.claude/settings.local.json"}`, "check", "file", "write", "/project/.claude/settings.local.json", ""},
-		"config-out":    {`{"hook_event_name":"ConfigChange","source":"local_settings","file_path":"/elsewhere/settings.local.json"}`, "check", "file", "write", "/elsewhere/settings.local.json", ""},
-		"config-nopath": {`{"hook_event_name":"ConfigChange","source":"local_settings"}`, "check", "file", "write", "/project/.claude/settings.local.json", ""},
+		"write":      {pre("Write", `{"file_path":"/project/src/a.go","content":"BODY"}`), "check", "file", "write", "/project/src/a.go", ""},
+		"edit":       {pre("Edit", `{"file_path":"/project/.env","old_string":"a","new_string":"b","replace_all":false}`), "check", "file", "write", "/project/.env", ""},
+		"multiedit":  {pre("MultiEdit", `{"file_path":"/project/x","edits":[{"old_string":"a","new_string":"b"}]}`), "check", "file", "write", "/project/x", ""},
+		"notebook":   {pre("NotebookEdit", `{"notebook_path":"/project/n.ipynb","new_source":"x","cell_id":"c"}`), "check", "file", "write", "/project/n.ipynb", ""},
+		"outside":    {pre("Write", `{"file_path":"/etc/passwd"}`), "check", "file", "write", "/etc/passwd", ""},
+		"fetch":      {pre("WebFetch", `{"url":"https://User:PW@API.Example.com:8443/p?token=Q#f","prompt":"p"}`), "check", "network", "connect", "api.example.com", ""},
+		"bash":       {pre("Bash", `{"command":"rm -rf /","description":"x","timeout":1000}`), "check", "process", "execute", "Bash", ""},
+		"mcp":        {pre("mcp__github__get_issue", `{"owner":"o","repo":"r"}`), "check", "tool", "call", "github/get_issue", ""},
+		"mcp-plugin": {pre("mcp__plugin_my-plugin_db__query", `{}`), "check", "tool", "call", "plugin_my-plugin_db/query", ""},
+		"mcp-odd":    {pre("mcp__broken", `{}`), "check", "tool", "call", "mcp__broken", ""},
+		"unknown":    {pre("FooBar", `{"anything":"x"}`), "check", "tool", "call", "FooBar", ""},
+		"no-input":   {`{"hook_event_name":"PreToolUse","tool_name":"Bash"}`, "check", "process", "execute", "Bash", ""},
+		"post":       {strings.Replace(pre("Write", `{"file_path":"/project/a"}`), "PreToolUse", "PostToolUse", 1), "emit", "file", "write", "/project/a", "success"},
+		"failure":    {strings.Replace(pre("Bash", `{"command":"x"}`), "PreToolUse", "PostToolUseFailure", 1), "emit", "process", "execute", "Bash", "failed"},
+		"config":     {`{"hook_event_name":"ConfigChange","source":"project_settings","file_path":"/project/.claude/settings.json"}`, "check", "file", "write", "/project/.claude/settings.json", ""},
+		"config-sub": {`{"hook_event_name":"ConfigChange","source":"local_settings","file_path":"/project/.claude/settings.local.json"}`, "check", "file", "write", "/project/.claude/settings.local.json", ""},
+		"config-out": {`{"hook_event_name":"ConfigChange","source":"local_settings","file_path":"/elsewhere/settings.local.json"}`, "check", "file", "write", "/elsewhere/settings.local.json", ""},
 	} {
 		t.Run(name, func(t *testing.T) {
-			r, skip, err := Normalize(parse(t, tc.raw), cwd)
+			r, skip, err := Normalize(parse(t, tc.raw))
 			if err != nil || skip {
 				t.Fatalf("skip=%v err=%v", skip, err)
 			}
@@ -78,7 +75,7 @@ func TestNormalizeSkipsAndRejects(t *testing.T) {
 		"empty":         `{}`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, skip, err := Normalize(parse(t, raw), cwd); !skip || err != nil {
+			if _, skip, err := Normalize(parse(t, raw)); !skip || err != nil {
 				t.Fatalf("expected skip, got skip=%v err=%v", skip, err)
 			}
 		})
@@ -93,9 +90,10 @@ func TestNormalizeSkipsAndRejects(t *testing.T) {
 		"fetch-missing":    pre("WebFetch", `{"prompt":"SECRETPROMPT"}`),
 		"input-array":      pre("Write", `[1,2]`),
 		"input-scalar":     pre("Edit", `"SECRETSTRING"`),
+		"config-nopath":    `{"hook_event_name":"ConfigChange","source":"local_settings"}`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, skip, err := Normalize(parse(t, raw), cwd)
+			_, skip, err := Normalize(parse(t, raw))
 			if err == nil || skip {
 				t.Fatalf("expected error, got skip=%v err=%v", skip, err)
 			}
@@ -108,7 +106,7 @@ func TestNormalizeSkipsAndRejects(t *testing.T) {
 
 func TestLineageIsBoundedAndSubagentsAreVisible(t *testing.T) {
 	raw := `{"hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{"file_path":"/p/a"},"tool_use_id":"toolu_9","agent_id":"agent 1\né","agent_type":"my-plugin:reviewer","session_id":"` + strings.Repeat("s", 300) + `"}`
-	r, _, err := Normalize(parse(t, raw), cwd)
+	r, _, err := Normalize(parse(t, raw))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +121,7 @@ func TestLineageIsBoundedAndSubagentsAreVisible(t *testing.T) {
 		t.Fatalf("bounded lineage rejected: %v", err)
 	}
 	// A main-agent call carries no agent fields; the decision path is identical.
-	main, _, _ := Normalize(parse(t, pre("Write", `{"file_path":"/p/a"}`)), cwd)
+	main, _, _ := Normalize(parse(t, pre("Write", `{"file_path":"/p/a"}`)))
 	if _, ok := main.Event.Lineage()["agent_id"]; ok {
 		t.Fatal("main agent fabricated an agent_id")
 	}
@@ -144,7 +142,7 @@ func TestNormalizeNeverCarriesPayload(t *testing.T) {
 		pre("Edit", `{"file_path":"/p/a","old_string":"BODY-SECRET","new_string":"EDIT-SECRET"}`),
 		pre("Agent", `{"prompt":"PROMPT-SECRET","description":"x"}`),
 	} {
-		r, skip, err := Normalize(parse(t, raw), cwd)
+		r, skip, err := Normalize(parse(t, raw))
 		if err != nil || skip {
 			t.Fatalf("%s: skip=%v err=%v", raw[:40], skip, err)
 		}
@@ -203,7 +201,7 @@ func TestRunFailsClosed(t *testing.T) {
 		{"malformed", `{"hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{"content":"SECRETCONTENT"`, &fake{}, Options{Socket: "/s", RunID: "run_x"}, 2, "not valid JSON", false},
 		{"not an object", `[1,2,3]`, &fake{}, Options{Socket: "/s", RunID: "run_x"}, 2, "not valid JSON", false},
 		{"uninterpretable", pre("Write", `{"content":"SECRETCONTENT"}`), &fake{}, Options{Socket: "/s", RunID: "run_x"}, 2, "has no path", false},
-		{"config change", `{"hook_event_name":"ConfigChange","source":"project_settings","file_path":"/project/.claude/settings.json"}`, &fake{resp: kill}, Options{Socket: "/s", RunID: "run_x", Cwd: cwd}, 2, "Rule: hook-tamper", true},
+		{"config change", `{"hook_event_name":"ConfigChange","source":"project_settings","file_path":"/project/.claude/settings.json"}`, &fake{resp: kill}, Options{Socket: "/s", RunID: "run_x"}, 2, "Rule: hook-tamper", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tc.opts.Send = tc.f.send
