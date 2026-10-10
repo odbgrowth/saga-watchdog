@@ -116,6 +116,12 @@ This prints four hook groups, each running `saga-watchdog claude hook` with a
 symlink, or has a `hooks` value that is not an object. Fix those by hand and
 run it again. User-level `~/.claude/settings.json` is never modified.
 
+Prefer the project file. Claude Code saves "always allow" permission rules
+to `.claude/settings.local.json` during a session. With the hook in the
+project file that save pauses the run for review; with `--local` it rewrites
+the file that carries the hook and stops the run as tampering. Choose those
+rules before starting a supervised run, or accept the pause.
+
 Open `/hooks` inside Claude Code to confirm the entries are loaded.
 
 ## 7. Starting Claude under SAGA
@@ -272,7 +278,7 @@ wrote the file.
 | Hook does not fire | Accept the workspace trust dialog; check `disableAllHooks`; confirm `saga-watchdog` resolves on the `PATH` Claude inherits. |
 | `claude doctor` warns that Claude Code predates 2.1.295 | Upgrade Claude Code. Until then a hook crash or timeout is non-blocking on Claude's side. |
 | Run pauses on an expected edit | Inspect `saga-watchdog events`, then `resume` or `kill` the run explicitly. |
-| Run pauses right after choosing "always allow" in a permission prompt | Claude saved a rule to `.claude/settings.local.json`; that change is held back and the run waits for review. Resume it, or choose those rules before starting a supervised run. |
+| Run pauses right after choosing "always allow" in a permission prompt | Claude saved a rule to `.claude/settings.local.json`; that change is held back and the run waits for review. Resume it, or choose those rules before starting a supervised run. If the hook lives in that file (`setup --local`), the save is hook tampering and stops the run; move the hook to `.claude/settings.json`. |
 | Warnings about failure-escalation after a denial | Expected after related follow-ups; raise thresholds in `escalation` if needed. |
 | `setup` refuses the settings file | The file is not a JSON object, is a symlink, or `hooks` is malformed. Fix by hand or print the snippet with `claude config`. |
 

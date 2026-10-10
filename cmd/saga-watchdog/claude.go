@@ -130,7 +130,7 @@ func claudeDoctor(g gitinfo.Info, c config.Config) int {
 			continue
 		}
 		configured = true
-		check(s.Preventive, s.File+" runs the SAGA PreToolUse hook with onFailure: block", s.File+" references SAGA but PreToolUse lacks onFailure: block or uses another matcher; run: saga-watchdog claude setup")
+		check(s.Preventive, s.File+" runs the SAGA PreToolUse hook with onFailure: block", s.File+" references SAGA but PreToolUse lacks onFailure: block or uses another matcher; compare with: saga-watchdog claude config")
 		if info, err := os.Lstat(path); err == nil && runtime.GOOS != "windows" {
 			check(info.Mode().Perm()&0022 == 0, s.File+" is not group/other writable", s.File+" is writable by group or others; use chmod go-w "+s.File)
 		}
