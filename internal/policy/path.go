@@ -179,9 +179,12 @@ func matchSegments(pattern, target []string) bool {
 	return match(0, 0)
 }
 
-// Controls cannot be hidden by a broad ignore such as .git/** or **. The Claude
-// Code settings files are listed because they can hold the SAGA preventive hook.
-var controlPatterns = []string{".saga-watchdog.yaml", ".git/config", ".git/hooks/**", ".github/workflows/**", ".claude/settings.json", ".claude/settings.local.json"}
+// agentSettings are the Claude Code settings files that can carry or disable
+// the SAGA preventive hook.
+var agentSettings = []string{".claude/settings.json", ".claude/settings.local.json"}
+
+// Controls cannot be hidden by a broad ignore such as .git/** or **.
+var controlPatterns = append([]string{".saga-watchdog.yaml", ".git/config", ".git/hooks/**", ".github/workflows/**"}, agentSettings...)
 
 func Ignored(target string, patterns []string) bool {
 	target = strings.TrimSuffix(strings.ReplaceAll(target, "\\", "/"), "/")

@@ -132,6 +132,16 @@ func (e *Engine) file(ev event.Event, now time.Time) Decision {
 				return decide("kill", "hook-tamper", control+" configures an active preventive integration and changed during the run")
 			}
 		}
+		if len(e.controls) > 0 {
+			// The sibling settings file can disable or loosen the hook. A change
+			// there (including Claude's own "always allow" save) is reviewed by a
+			// human rather than treated as proof of tampering.
+			for _, settings := range agentSettings {
+				if name == settings {
+					return decide("pause", "agent-config-modification", settings+" changed while a preventive integration is active")
+				}
+			}
+		}
 		if name == ".git" || name == ".git/config" || Match(".git/hooks/**", name) {
 			return decide("pause", "git-security-modification", "Git security configuration changed")
 		}

@@ -174,7 +174,7 @@ a denial. Pre-action enforcement never depends on them.
 | `Bash` | `process` / `execute` | `Bash` | The command text is never read. SAGA is not a shell interpreter; effects are seen by the filesystem observer afterwards. |
 | `mcp__<server>__<tool>` | `tool` / `call` | `server/tool` | Arguments are discarded. |
 | Any other matched tool | `tool` / `call` | tool name | Bounded identifier only; no capability is inferred from the name. |
-| `ConfigChange` (project or local settings) | `policy` / `tamper` | settings file | Kill-level, like editing `.saga-watchdog.yaml`. |
+| `ConfigChange` (project or local settings) | `file` / `write` | the settings file | Kill (`hook-tamper`) when that file carries the SAGA hook, like editing `.saga-watchdog.yaml`. Pause (`agent-config-modification`) for the sibling settings file, which can disable or loosen the hook; this includes Claude's own "always allow" save to `.claude/settings.local.json`. Exit 2 keeps the change from being applied. |
 
 Tools outside the matcher (`Read`, `Glob`, `Grep`, `WebSearch`, `Agent`,
 `AskUserQuestion`, ...) never reach SAGA. File reads are not monitored.
@@ -272,6 +272,7 @@ wrote the file.
 | Hook does not fire | Accept the workspace trust dialog; check `disableAllHooks`; confirm `saga-watchdog` resolves on the `PATH` Claude inherits. |
 | `claude doctor` warns that Claude Code predates 2.1.295 | Upgrade Claude Code. Until then a hook crash or timeout is non-blocking on Claude's side. |
 | Run pauses on an expected edit | Inspect `saga-watchdog events`, then `resume` or `kill` the run explicitly. |
+| Run pauses right after choosing "always allow" in a permission prompt | Claude saved a rule to `.claude/settings.local.json`; that change is held back and the run waits for review. Resume it, or choose those rules before starting a supervised run. |
 | Warnings about failure-escalation after a denial | Expected after related follow-ups; raise thresholds in `escalation` if needed. |
 | `setup` refuses the settings file | The file is not a JSON object, is a symlink, or `hooks` is malformed. Fix by hand or print the snippet with `claude config`. |
 

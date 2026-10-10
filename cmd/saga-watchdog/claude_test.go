@@ -208,6 +208,7 @@ func TestClaudeHookObserveModeAndFailClosedPaths(t *testing.T) {
 h "$(pre Edit '{"file_path":"'"$PWD"'/.env","old_string":"a","new_string":"b"}' 1 ',"agent_id":"agent-9","agent_type":"custom"')" env-observed
 h '{"hook_event_name":"ConfigChange","source":"project_settings","file_path":"'"$PWD"'/.claude/settings.json"}' config-observed
 h "$(pre FooBar '{"anything":"ARG-SECRET"}' 2 '')" unknown
+h '{"hook_event_name":"ConfigChange","source":"local_settings","file_path":"'"$PWD"'/.claude/settings.local.json"}' local-observed
 h "$(pre Write '{"file_path":"'"$PWD"'/sub/../.saga-watchdog.yaml","content":"x"}' 3 '')" policy-observed
 SAGA_WATCHDOG_RUN_ID=run_wrong_identifier_0 h "$(pre Write '{"file_path":"'"$PWD"'/a","content":"x"}' 4 '')" wrong-run
 SAGA_WATCHDOG_SOCKET=/nonexistent/events.sock h "$(pre Write '{"file_path":"'"$PWD"'/a","content":"x"}' 5 '')" dead-socket
@@ -220,7 +221,7 @@ h '{"hook_event_name":"SessionStart","source":"startup"}' unsupported
 		t.Fatalf("observe run exit %d: %s", got, out)
 	}
 	got := codes(t, root)
-	for label, want := range map[string]string{"env-observed": "0", "config-observed": "0", "unknown": "0", "policy-observed": "0", "wrong-run": "2", "dead-socket": "2", "malformed": "2", "unsupported": "0"} {
+	for label, want := range map[string]string{"env-observed": "0", "config-observed": "0", "unknown": "0", "local-observed": "0", "policy-observed": "0", "wrong-run": "2", "dead-socket": "2", "malformed": "2", "unsupported": "0"} {
 		if got[label] != want {
 			t.Errorf("%s exit %q, want %s", label, got[label], want)
 		}
@@ -235,8 +236,10 @@ h '{"hook_event_name":"SessionStart","source":"startup"}' unsupported
 		t.Fatal("hook stderr echoed payload")
 	}
 	stdout := string(mustRead(t, filepath.Join(root, "all.out")))
-	if !strings.Contains(stdout, "observe mode: would pause [protected-path]") || !strings.Contains(stdout, "would kill [policy-tamper]") {
-		t.Fatalf("observe mode did not report would-actions: %s", stdout)
+	for _, want := range []string{"observe mode: would pause [protected-path]", "would kill [hook-tamper]", "would pause [agent-config-modification]", "would kill [policy-tamper]"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("observe mode did not report %q: %s", want, stdout)
+		}
 	}
 	events, raw := readEvents(t, root, "")
 	if strings.Contains(raw, "ARG-SECRET") || strings.Contains(raw, "RAW-SECRET") {
@@ -246,8 +249,11 @@ h '{"hook_event_name":"SessionStart","source":"startup"}' unsupported
 	if env == nil || env.Result != "allowed" || env.Metadata["decision"] != "pause" || env.Metadata["mode"] != "observe" || env.RuleID != "protected-path" || env.Metadata["agent_id"] != "agent-9" {
 		t.Fatalf("observe audit: %+v", env)
 	}
-	if e := find(events, "integration", "policy", ".claude/settings.json"); e == nil || e.Metadata["decision"] != "kill" || e.RuleID != "policy-tamper" || e.Result != "allowed" {
+	if e := find(events, "integration", "file", ".claude/settings.json"); e == nil || e.Metadata["decision"] != "kill" || e.RuleID != "hook-tamper" || e.Result != "allowed" {
 		t.Fatalf("config change audit: %+v", e)
+	}
+	if e := find(events, "integration", "file", ".claude/settings.local.json"); e == nil || e.Metadata["decision"] != "pause" || e.RuleID != "agent-config-modification" || e.Result != "allowed" {
+		t.Fatalf("local settings change audit: %+v", e)
 	}
 	// An unknown tool after a denial is the documented "alternate tool"
 	// follow-up: the second related event warns, the call itself is allowed.

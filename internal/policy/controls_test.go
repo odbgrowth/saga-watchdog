@@ -113,8 +113,17 @@ func TestIntegrationControlFilesAreKillLevel(t *testing.T) {
 		}
 	}
 	// Without an active integration the same files are ordinary project files.
-	if d := New(cfg, root).Evaluate(event.Event{Timestamp: epoch, Type: "file", Action: "write", Target: ".claude/settings.json"}); d.Action != "allow" {
-		t.Fatalf("inactive integration config escalated: %+v", d)
+	for _, target := range []string{".claude/settings.json", ".claude/settings.local.json"} {
+		if d := New(cfg, root).Evaluate(event.Event{Timestamp: epoch, Type: "file", Action: "write", Target: target}); d.Action != "allow" {
+			t.Fatalf("inactive integration config escalated: %+v", d)
+		}
+	}
+	// The sibling settings file can disable the hook: pause for human review.
+	if d := New(cfg, root, ".claude/settings.json").Evaluate(event.Event{Timestamp: epoch, Type: "file", Action: "write", Target: filepath.Join(root, ".claude", "settings.local.json")}); d.Action != "pause" || d.RuleID != "agent-config-modification" {
+		t.Fatalf("sibling settings change: %+v", d)
+	}
+	if d := New(cfg, root, ".claude/settings.json").Evaluate(event.Event{Timestamp: epoch, Type: "file", Action: "write", Target: ".claude/other.json"}); d.Action != "allow" {
+		t.Fatalf("unrelated .claude file escalated: %+v", d)
 	}
 	// Neither a symlink alias of the control nor a control replaced by a
 	// symlink to an ordinary file escapes the rule.

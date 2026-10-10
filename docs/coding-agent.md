@@ -157,7 +157,7 @@ The default profile includes:
 | --- | --- |
 | Protected branches | Refuse startup on `main` and `master`. |
 | Policy file | Treat changes during a run as critical tampering (`policy-tamper`, kill). |
-| Integration settings | When a deep integration is active, treat changes to its settings files as tampering (`hook-tamper`, kill). |
+| Integration settings | When a deep integration is active, treat changes to the settings file that carries its hook as tampering (`hook-tamper`, kill) and pause for changes to the sibling settings file (`agent-config-modification`). |
 | Git security files | Protect `.git/config`, `.git/hooks/**` and linked-worktree `.git` pointers. |
 | CI workflows | Pause for changes under `.github/workflows/**`. |
 | Secret-like files | Pause for writes to `.env`, `.env.*`, `credentials*`, `secrets*`, `*.pem` and `*.key` at any depth. |

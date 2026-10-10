@@ -112,10 +112,11 @@ From then on, Write, Edit, MultiEdit, NotebookEdit, Bash, WebFetch and MCP
 tool calls are checked by the same policy engine before they execute:
 
 ```text
-Write src/app.go          -> allowed
-Edit .env                 -> blocked before execution, run paused
+Write src/app.go           -> allowed
+Edit .env                  -> blocked before execution, run paused
 Edit .claude/settings.json -> blocked, run stopped (hook tampering)
-SAGA not running          -> every matched call blocked (fail closed)
+Claude saves "always allow" -> settings change held back, run paused for review
+SAGA not running           -> every matched call blocked (fail closed)
 ```
 
 Each decision is recorded with a stable rule ID, the tool name and, where

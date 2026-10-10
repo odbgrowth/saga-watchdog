@@ -69,15 +69,23 @@ func Normalize(in Input, cwd string) (request socket.Request, skip bool, err err
 	case "PostToolUseFailure":
 		request.Operation, result = "emit", "failed"
 	case "ConfigChange":
-		if in.Source != "project_settings" && in.Source != "local_settings" {
+		// A project or local settings change is reported as a write to that
+		// file. The policy engine decides: kill when the file carries the SAGA
+		// hook, pause for the sibling settings file while the hook is active.
+		var target string
+		switch in.Source {
+		case "project_settings":
+			target = filepath.Join(cwd, ".claude", "settings.json")
+		case "local_settings":
+			target = filepath.Join(cwd, ".claude", "settings.local.json")
+		default:
 			return request, true, nil
 		}
-		target := in.Source
-		if rel, err := filepath.Rel(cwd, in.FilePath); in.FilePath != "" && err == nil && !strings.HasPrefix(rel, "..") {
-			target = filepath.ToSlash(rel)
+		if in.FilePath != "" {
+			target = in.FilePath
 		}
 		request.Operation = "check"
-		request.Event = socket.Input{Type: "policy", Action: "tamper", Target: target, Producer: Producer, SessionID: identifier(in.SessionID)}
+		request.Event = socket.Input{Type: "file", Action: "write", Target: target, Producer: Producer, SessionID: identifier(in.SessionID)}
 		return request, false, nil
 	default:
 		return request, true, nil
