@@ -21,12 +21,33 @@ import (
 	"github.com/odbgrowth/saga-watchdog/internal/store"
 )
 
+// Input is the canonical event a cooperative integration submits. The optional
+// lineage fields are bounded identifiers for audit correlation only; they
+// never carry arguments, prompts or contents and never influence a decision.
 type Input struct {
-	Type   string `json:"type"`
-	Action string `json:"action"`
-	Target string `json:"target"`
-	Result string `json:"result,omitempty"`
+	Type      string `json:"type"`
+	Action    string `json:"action"`
+	Target    string `json:"target"`
+	Result    string `json:"result,omitempty"`
+	Producer  string `json:"producer,omitempty"`
+	Tool      string `json:"tool,omitempty"`
+	AgentID   string `json:"agent_id,omitempty"`
+	AgentType string `json:"agent_type,omitempty"`
+	CallID    string `json:"call_id,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
 }
+
+// Lineage maps the non-empty optional fields to their audit metadata keys.
+func (i Input) Lineage() map[string]string {
+	m := make(map[string]string, 6)
+	for key, value := range map[string]string{"producer": i.Producer, "tool_name": i.Tool, "agent_id": i.AgentID, "agent_type": i.AgentType, "tool_use_id": i.CallID, "session_id": i.SessionID} {
+		if value != "" {
+			m[key] = value
+		}
+	}
+	return m
+}
+
 type Request struct {
 	Operation string `json:"operation"`
 	RunID     string `json:"run_id,omitempty"`
@@ -77,6 +98,11 @@ func Validate(r Request, controls bool) error {
 	}
 	if strings.ContainsAny(r.Event.Action+r.Event.Target, "\x00\r\n") {
 		return errors.New("event contains control characters")
+	}
+	for key, value := range r.Event.Lineage() {
+		if len(value) > 128 || strings.ContainsFunc(value, func(c rune) bool { return c < 0x21 || c > 0x7e }) {
+			return fmt.Errorf("%s must be at most 128 printable ASCII bytes without spaces", key)
+		}
 	}
 	if r.Operation == "check" && r.Event.Result != "" {
 		return errors.New("check cannot supply a result")

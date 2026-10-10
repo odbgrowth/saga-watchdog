@@ -73,3 +73,14 @@ func TestGlobMatchingAndIgnores(t *testing.T) {
 		t.Fatal("ordinary ignores are incorrect")
 	}
 }
+
+func TestClaudeSettingsCannotBeIgnored(t *testing.T) {
+	for _, target := range []string{".claude", ".claude/settings.json", ".claude/settings.local.json"} {
+		if Ignored(target, []string{"**", ".claude/**"}) {
+			t.Errorf("integration control %s hidden by ignore", target)
+		}
+	}
+	if !Ignored(".claude/other.json", []string{".claude/**"}) {
+		t.Fatal("ordinary .claude file is not ignorable")
+	}
+}

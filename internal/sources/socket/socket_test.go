@@ -198,3 +198,30 @@ func TestConcurrentClientsAndCancelledHandlers(t *testing.T) {
 		t.Fatal("cancelled handler leaked")
 	}
 }
+
+func TestLineageFieldsAreBoundedIdentifiers(t *testing.T) {
+	ok := `{"operation":"check","event":{"type":"file","action":"write","target":"a","producer":"claude-code","tool":"Edit","agent_id":"agent-1","agent_type":"custom","call_id":"toolu_01ABC","session_id":"sess-1"}}`
+	r, err := Decode([]byte(ok), false)
+	if err != nil {
+		t.Fatalf("lineage rejected: %v", err)
+	}
+	if got := r.Event.Lineage(); len(got) != 6 || got["tool_name"] != "Edit" || got["tool_use_id"] != "toolu_01ABC" {
+		t.Fatalf("lineage mapping: %+v", got)
+	}
+	if got := (Input{}).Lineage(); len(got) != 0 {
+		t.Fatalf("empty lineage produced keys: %+v", got)
+	}
+	for name, input := range map[string]string{
+		"long":     `{"operation":"check","event":{"type":"file","action":"write","target":"a","producer":"` + strings.Repeat("p", 129) + `"}}`,
+		"space":    `{"operation":"check","event":{"type":"file","action":"write","target":"a","tool":"Edit Write"}}`,
+		"control":  `{"operation":"check","event":{"type":"file","action":"write","target":"a","agent_id":"a\u0001b"}}`,
+		"nonascii": `{"operation":"check","event":{"type":"file","action":"write","target":"a","session_id":"clé"}}`,
+		"unknown":  `{"operation":"check","event":{"type":"file","action":"write","target":"a","arguments":{"x":1}}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Decode([]byte(input), false); err == nil {
+				t.Fatal("unbounded or unknown lineage accepted")
+			}
+		})
+	}
+}

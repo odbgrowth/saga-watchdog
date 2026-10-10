@@ -26,6 +26,7 @@ type Run struct {
 	Mode       string     `json:"mode"`
 	Branch     string     `json:"branch"`
 	PolicyHash string     `json:"policy_hash"`
+	Controls   []string   `json:"controls,omitempty"`
 	Socket     string     `json:"socket"`
 	Control    string     `json:"control"`
 	Started    time.Time  `json:"started"`

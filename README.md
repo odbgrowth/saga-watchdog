@@ -3,30 +3,63 @@
 [![CI](https://github.com/odbgrowth/saga-watchdog/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/odbgrowth/saga-watchdog/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-**Local supervision and observation for AI agents.**
+**SAGA Watchdog is a small, local and deterministic safety layer for AI
+agents.** It can check supported actions before execution, supervise agent
+processes while they run, and independently observe selected runtime changes
+afterwards.
 
-SAGA Watchdog is a small Go command-line tool with two modes: it can supervise
-an AI coding agent it starts, or observe containers that are already running.
-It records local events and applies explicit rules to the activity its sources
-can see. Policy decisions use deterministic code, without an LLM.
+SAGA runs outside the reasoning model. It does not ask the AI whether its own
+behaviour is safe. Policy is a handful of explicit rules over observable
+events, evaluated by deterministic Go code with no LLM, no cloud service and
+no database.
 
-**Status:** development code is available on `main`. No tagged release or
-downloadable binary has been published yet. Instructions below install the
-current development version. Use a reviewed commit for a reproducible deployment.
+**Status:** development code on `main`. No tagged release or downloadable
+binary has been published yet. Use a reviewed commit for a reproducible
+deployment.
 
-## Choose a mode
+## Why it exists
 
-| | Coding-agent supervisor | Docker observer |
-| --- | --- | --- |
-| Use it for | A CLI agent you start under SAGA | An existing container on a Docker host |
-| Start | `saga-watchdog run -- COMMAND` | `saga-watchdog docker watch --config FILE` |
-| Observes | Covered file changes, process state, Git branch and integration events | Selected container state, healthchecks, resources and lifecycle events |
-| Can intervene | Warn, pause or stop the process group SAGA started | Observation only; leaves containers running |
-| Configuration | `.saga-watchdog.yaml` in the Git project root | Separate YAML with full container IDs |
-| Guide | [Coding agents](docs/coding-agent.md) | [Existing Docker agents](docs/docker-observer.md) |
+Modern coding agents edit files, execute commands, invoke MCP tools, reach
+external services, use credentials, create subagents, retry denied operations
+and keep running for hours. Prompt instructions alone are not a security
+boundary. SAGA adds an independent local control layer:
 
-The supervisor does not attach to arbitrary running processes. The Docker
-observer does not inspect an agent's tool calls, API requests or reasoning.
+```text
+1. PREVENT     supported agent tool calls
+               -> deterministic policy check before execution
+
+2. SUPERVISE   the process tree SAGA started
+               -> runtime budget, pause / resume / stop
+
+3. OBSERVE     filesystem, Git, integrations, Docker
+               -> audit trail and escalation
+```
+
+Constrain before execution. Supervise during execution. Observe after
+execution. Repeated pressure against a boundary escalates from warning to
+pause to stop. A paused run stays paused until a human resumes or kills it.
+
+The agent reasons. SAGA does not. It watches boundaries.
+
+## Feature matrix
+
+| Capability | Claude Code integration | Coding-agent supervisor | Docker observer |
+| --- | ---: | ---: | ---: |
+| Pre-action checks | Yes, matched tools | Cooperative `check` integrations | No |
+| Filesystem observation | Post-action, via the supervisor | Yes, post-action | No |
+| Git branch monitoring | Through the supervisor | Yes | No |
+| Pause/kill owned process | Yes | Yes | No |
+| Container lifecycle observation | No | No | Yes |
+| Container health/resource observation | No | No | Yes |
+| Raw syscall interception | No | No | No |
+| Kernel network firewall | No | No | No |
+| LLM safety decisions | No | No | No |
+
+SAGA is not a sandbox, a firewall, a syscall interceptor or an EDR. It does
+not read prompts, chain-of-thought, file contents or command text. When both
+the agent and SAGA run as the same OS user, process separation is policy
+enforcement for a cooperating runtime, not a hardened privilege boundary.
+Read [SECURITY.md](SECURITY.md) before relying on it for sensitive work.
 
 ## Install
 
@@ -40,47 +73,68 @@ export PATH="$(go env GOPATH)/bin:$PATH"
 saga-watchdog --help
 ```
 
-If you set `GOBIN`, add that directory to `PATH` instead. Development builds report
-`saga-watchdog dev` with `saga-watchdog version`. For a reproducible installation,
-replace `@main` with a reviewed commit hash. Go's
-[module documentation](https://go.dev/ref/mod#go-install) explains version queries.
+If you set `GOBIN`, add that directory to `PATH` instead. For a reproducible
+installation, replace `@main` with a reviewed commit hash.
 
-SAGA needs no cloud account or database. The agent you run may have its own
-account requirements. Docker observation additionally requires access to a
-local Docker Engine socket.
-
-## Try the coding-agent supervisor
-
-Run these commands in an existing Git project:
+## Quick start
 
 ```sh
-cd /path/to/your/project
+cd my-project
 git switch -c agent/my-task
+
 saga-watchdog init
 saga-watchdog doctor
+
+saga-watchdog run -- claude
+# Or any CLI agent: saga-watchdog run -- codex
 ```
 
-Inspect the generated `.saga-watchdog.yaml`, then start your installed agent:
+The default policy refuses `main` and `master`, treats changes to
+`.saga-watchdog.yaml` as tampering, pauses for Git security, CI workflow and
+secret-like file changes, detects deletion bursts, escalates repeated denials
+and stops a run after two hours. The policy stays fixed for the run. The
+[coding-agent guide](docs/coding-agent.md) covers configuration, controls and
+the generic `check`/`emit` integration; the [shell demo](examples/DEMO.md)
+shows it working without any AI account.
+
+## Preventive Claude Code checks
+
+Claude Code exposes hook events before each tool call. Install the SAGA hook
+once per project and start Claude under supervision:
 
 ```sh
-saga-watchdog run -- codex
-# Or: saga-watchdog run -- claude
+saga-watchdog claude setup      # merges hooks into .claude/settings.json
+saga-watchdog claude doctor
+saga-watchdog run -- claude
 ```
 
-The default profile refuses `main` and `master`, watches policy and Git security
-files, pauses for covered CI or secret-like file changes, and limits a run to
-two hours. The policy stays fixed for that run. The child starts in the Git
-project root. SAGA does not change the agent's own sandbox or approval settings.
+From then on, Write, Edit, MultiEdit, NotebookEdit, Bash, WebFetch and MCP
+tool calls are checked by the same policy engine before they execute:
 
-Try the [shell-only demo](examples/DEMO.md) without an AI account, or read the
-[coding-agent guide](docs/coding-agent.md) for configuration, controls and
-`check`/`emit` integrations.
+```text
+Write src/app.go           -> allowed
+Edit .env                  -> blocked before execution, run paused
+Edit .claude/settings.json -> blocked, run stopped (hook tampering)
+Claude saves "always allow" -> settings change held back, run paused for review
+SAGA not running           -> every matched call blocked (fail closed)
+```
+
+Each decision is recorded with a stable rule ID, the tool name and, where
+Claude provides them, the tool-call, session and subagent identifiers. File
+contents, command text, URLs beyond the host, MCP arguments and prompts are
+never collected. Subagents receive no exemption.
+
+Read the [Claude Code guide](docs/claude-code.md) for the verified hook
+contract, tool mapping, observe mode, fail-closed behaviour and
+troubleshooting, and the [Claude demo](examples/claude-code.md) for a
+reproducible walkthrough.
 
 ## Observe an existing Docker agent
 
-Follow the [Docker installation guide](docs/docker-observer.md) to build and
-copy the binary, select full container IDs and configure the service account.
-Then validate and inspect once before enabling continuous observation:
+The Docker observer runs beside containers that already exist and never
+controls them. Follow the [Docker guide](docs/docker-observer.md) to build and
+copy the binary, select full container IDs and configure the service
+account, then:
 
 ```sh
 saga-watchdog docker validate --config /path/to/docker.yaml
@@ -89,50 +143,45 @@ saga-watchdog docker watch --config /path/to/docker.yaml
 ```
 
 Use [examples/docker-observer.yaml](examples/docker-observer.yaml) as the
-configuration template. Replace its container ID and state-directory values.
-The commands above need permission to access the configured Docker socket and
-state directory. The [systemd example](deploy/saga-watchdog-docker.service)
-runs SAGA as a separate Linux service. Updating or stopping SAGA leaves the
-selected containers running.
+template and the [systemd example](deploy/saga-watchdog-docker.service) to run
+it as a separate Linux service. Docker socket access is administrative
+authority even though the observer only sends read requests.
 
 ## What the results mean
 
-- **Observed file changes:** detected after they happen; SAGA cannot undo the
-  first write or reliably attribute it to the agent.
-- **Reported tool/API events:** require an integration that calls `check` or
-  `emit`. Without it, those attempts are invisible to SAGA.
-- **Escalation:** repeated denials and related follow-up events can trigger
-  configured thresholds. This is a rule over available events, not proof of
-  the agent's intent.
-- **Container health:** depends on a Docker healthcheck. A running container
-  without one has unknown application health.
-- **Process controls:** cover the Unix process group SAGA created. A detached
-  process or remote job may be outside that group.
+- **Pre-action checks** are decisions over what the agent runtime reported it
+  was about to do. They cover only tools that pass through a hook or a
+  cooperative `check` call.
+- **Observed file changes** are detected after they happen. SAGA cannot undo
+  the first write or prove which same-user process made it.
+- **Escalation** is a rule over the available events, not a claim about the
+  agent's intent: for example, three related denied operations within 120
+  seconds.
+- **Process controls** cover the Unix process group SAGA created. A detached
+  process or a remote job may be outside it.
+- **Container health** depends on a Docker healthcheck. Resource metrics do
+  not reveal AI decisions.
 
-SAGA is not a sandbox, firewall or complete security boundary. The supervisor
-normally shares an OS user with its child. Docker socket access is administrative
-authority even though the observer itself sends only read requests.
-Read the [security policy and limitations](SECURITY.md).
+## Commands
 
-## Status, history and notifications
+```text
+Project        init | validate | doctor
+Run            run -- <command> | status | events | pause | resume | kill
+Integrations   check | emit
+Claude Code    claude config | setup [--local] | doctor | hook
+Docker         docker validate | watch | status | events
+```
 
-The coding supervisor provides `status` and `events` commands. Docker mode has
-separate `docker status --config FILE` and `docker events --config FILE` commands,
-with JSON status and retained JSONL history. See the corresponding guide for
-storage, retention and freshness rules.
-
-**Email notifications, a dashboard and automated Ansible deployment are not
-implemented yet.** Current output is local terminal output and files. No prompts
-or source contents are collected by SAGA; an agent's own terminal output is
-outside SAGA's log redaction.
+Run `saga-watchdog --help` for arguments.
 
 ## Documentation and contributing
 
-- [Coding-agent configuration, controls and integrations](docs/coding-agent.md)
-- [Docker installation, operation and acceptance check](docs/docker-observer.md)
-- [Reproducible shell demo](examples/DEMO.md)
+- [Coding-agent guide: supervision, observation, policy, check/emit](docs/coding-agent.md)
+- [Claude Code guide: preventive hooks](docs/claude-code.md)
+- [Docker observer guide](docs/docker-observer.md)
+- [Shell demo](examples/DEMO.md) and [Claude Code demo](examples/claude-code.md)
 - [Contributing, tests and release process](CONTRIBUTING.md)
-- [Private vulnerability reporting and security boundaries](SECURITY.md)
+- [Security policy, threat model and limitations](SECURITY.md)
 
 Report ordinary bugs through [Issues](https://github.com/odbgrowth/saga-watchdog/issues).
 Use [private reporting](https://github.com/odbgrowth/saga-watchdog/security/advisories/new)

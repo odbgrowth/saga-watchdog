@@ -13,10 +13,12 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/odbgrowth/saga-watchdog/internal/config"
 	"github.com/odbgrowth/saga-watchdog/internal/event"
 	"github.com/odbgrowth/saga-watchdog/internal/gitinfo"
+	"github.com/odbgrowth/saga-watchdog/internal/integrations/claudecode"
 	"github.com/odbgrowth/saga-watchdog/internal/policy"
 	"github.com/odbgrowth/saga-watchdog/internal/sources/filesystem"
 	"github.com/odbgrowth/saga-watchdog/internal/sources/socket"
@@ -26,7 +28,7 @@ import (
 
 var version = "dev"
 
-const usage = `SAGA Watchdog — local deterministic agent supervisor
+const usage = `SAGA Watchdog: local deterministic agent supervisor
 
 Usage:
   saga-watchdog init | validate | doctor | version
@@ -36,10 +38,13 @@ Usage:
   saga-watchdog pause|resume|kill <run-id>
   saga-watchdog check --type TYPE --action ACTION --target TARGET [--run ID]
   saga-watchdog emit --type TYPE --action ACTION --target TARGET --result RESULT [--run ID]
+  saga-watchdog claude config | setup [--local] | doctor
+  saga-watchdog claude hook            (run by Claude Code hooks; reads stdin)
   saga-watchdog docker validate|watch|status|events --config FILE
   saga-watchdog docker watch --config FILE --once
 
 Linux and macOS process supervision. No file-read or raw network monitoring.
+Claude Code can ask SAGA before supported tool calls; see docs/claude-code.md.
 Docker observation uses a separate config and needs no Git repository.
 `
 
@@ -61,6 +66,9 @@ func cli(args []string) int {
 	}
 	if args[0] == "docker" {
 		return dockerCLI(args[1:])
+	}
+	if args[0] == "claude" {
+		return claudeCLI(args[1:])
 	}
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -203,6 +211,11 @@ func doctor(g gitinfo.Info, c config.Config) int {
 		source.Close()
 	}
 	cancel()
+	if controls := claudecode.Controls(g.Root); len(controls) > 0 {
+		fmt.Println("OK Claude Code preventive hook configured in", strings.Join(controls, ", "), "(verify: saga-watchdog claude doctor)")
+	} else {
+		fmt.Println("! No Claude Code preventive hook; supervision and observation only (optional: saga-watchdog claude setup)")
+	}
 	fmt.Println("! File READ monitoring and raw network enforcement are unavailable")
 	fmt.Println("! Integrations report events; they do not prove OS actions occurred")
 	fmt.Println("! Same-user separation is not a sandbox; detached processes can escape the group")

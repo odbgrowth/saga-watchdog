@@ -61,3 +61,21 @@ func TestUniqueIDs(t *testing.T) {
 		seen[id] = true
 	}
 }
+
+func TestSanitizedKeepsBoundedLineageOnly(t *testing.T) {
+	clean := Event{Metadata: map[string]any{
+		"producer": "claude-code", "tool_name": "Edit", "agent_id": "agent-1", "agent_type": "custom",
+		"tool_use_id": "toolu_01", "session_id": "sess-1",
+		"tool_input": map[string]any{"content": "secret body"}, "command": "curl -H 'Authorization: Bearer x'",
+	}}.Sanitized()
+	for _, key := range []string{"producer", "tool_name", "agent_id", "agent_type", "tool_use_id", "session_id"} {
+		if _, ok := clean.Metadata[key]; !ok {
+			t.Errorf("lineage key %s dropped", key)
+		}
+	}
+	for _, key := range []string{"tool_input", "command"} {
+		if _, ok := clean.Metadata[key]; ok {
+			t.Errorf("payload key %s persisted", key)
+		}
+	}
+}

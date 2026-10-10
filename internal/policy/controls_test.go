@@ -95,3 +95,77 @@ func TestProtectedSymlinkNamesRetainTheirRules(t *testing.T) {
 		})
 	}
 }
+
+func TestIntegrationControlFilesAreKillLevel(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.Filesystem.Ignore = []string{"**"}
+	controls := []string{".claude/settings.json", ".claude/settings.local.json"}
+	for _, target := range []string{".claude/settings.json", filepath.Join(root, ".claude", "settings.local.json")} {
+		for _, action := range []string{"write", "create", "delete", "rename", "chmod"} {
+			d := New(cfg, root, controls...).Evaluate(event.Event{Timestamp: epoch, Type: "file", Action: action, Target: target})
+			if d.Action != "kill" || d.RuleID != "hook-tamper" || d.Severity != "critical" {
+				t.Errorf("%s %s: %+v, want kill/hook-tamper", action, target, d)
+			}
+		}
+	}
+	// Without an active integration the same files are ordinary project files.
+	for _, target := range []string{".claude/settings.json", ".claude/settings.local.json"} {
+		if d := New(cfg, root).Evaluate(event.Event{Timestamp: epoch, Type: "file", Action: "write", Target: target}); d.Action != "allow" {
+			t.Fatalf("inactive integration config escalated: %+v", d)
+		}
+	}
+	// The sibling settings file can disable the hook: pause for human review.
+	if d := New(cfg, root, ".claude/settings.json").Evaluate(event.Event{Timestamp: epoch, Type: "file", Action: "write", Target: filepath.Join(root, ".claude", "settings.local.json")}); d.Action != "pause" || d.RuleID != "agent-config-modification" {
+		t.Fatalf("sibling settings change: %+v", d)
+	}
+	if d := New(cfg, root, ".claude/settings.json").Evaluate(event.Event{Timestamp: epoch, Type: "file", Action: "write", Target: ".claude/other.json"}); d.Action != "allow" {
+		t.Fatalf("unrelated .claude file escalated: %+v", d)
+	}
+	// Neither a symlink alias of the control nor a control replaced by a
+	// symlink to an ordinary file escapes the rule.
+	if err := os.MkdirAll(filepath.Join(root, ".claude"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	ordinary := filepath.Join(root, "ordinary.json")
+	if err := os.WriteFile(ordinary, []byte("{}"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(ordinary, filepath.Join(root, ".claude", "settings.json")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".claude", "settings.local.json"), []byte("{}"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, ".claude", "settings.local.json"), filepath.Join(root, "alias.json")); err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range []string{".claude/settings.json", "alias.json"} {
+		if d := New(cfg, root, controls...).Evaluate(event.Event{Timestamp: epoch, Type: "file", Action: "write", Target: target}); d.Action != "kill" || d.RuleID != "hook-tamper" {
+			t.Errorf("symlink %s escaped control protection: %+v", target, d)
+		}
+	}
+	// A later mutation of the caller's slice cannot change the engine's controls.
+	controls[0] = "other.json"
+	if d := New(cfg, root, ".claude/settings.json").Evaluate(event.Event{Timestamp: epoch, Type: "file", Action: "write", Target: "other.json"}); d.Action != "allow" {
+		t.Fatalf("unexpected control: %+v", d)
+	}
+}
+
+func TestRemovedControlAncestorIsTampering(t *testing.T) {
+	cfg := config.Default()
+	for _, action := range []string{"delete", "rename"} {
+		if d := New(cfg, t.TempDir(), ".claude/settings.json").Evaluate(event.Event{Timestamp: epoch, Type: "file", Action: action, Target: ".claude"}); d.Action != "kill" || d.RuleID != "hook-tamper" {
+			t.Errorf("%s .claude with an active control: %+v, want kill/hook-tamper", action, d)
+		}
+	}
+	if d := New(cfg, t.TempDir(), ".claude/settings.json").Evaluate(event.Event{Timestamp: epoch, Type: "file", Action: "write", Target: ".claude"}); d.Action != "allow" {
+		t.Errorf("touching the directory entry escalated: %+v", d)
+	}
+	if d := New(cfg, t.TempDir()).Evaluate(event.Event{Timestamp: epoch, Type: "file", Action: "rename", Target: ".claude"}); d.Action != "allow" {
+		t.Errorf("inactive integration escalated: %+v", d)
+	}
+}
