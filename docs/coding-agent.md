@@ -3,9 +3,13 @@
 [Back to the overview](../README.md)
 
 Use this mode to start a command under SAGA in a Git project. Follow the
-[quick start](../README.md#try-the-coding-agent-supervisor) first. The child starts
+[quick start](../README.md#quick-start) first. The child starts
 in the Git project root, even when SAGA is invoked from a subdirectory. Relative
 file targets in `check` and `emit` are also relative to that root.
+
+This guide is generic: everything here applies to any CLI agent. Agents that
+expose structured pre-action events can add a deep integration on top; the
+only one implemented is [Claude Code](claude-code.md).
 
 ## How it works
 
@@ -31,6 +35,23 @@ The agent is the reasoning plane. Project policy is the control plane. The
 supervisor applies that policy to the events it can see. On supported Unix
 systems it signals its own process group, first gracefully, then forcibly after
 the configured grace period.
+
+### Generic supervision
+
+Works for any CLI agent you can start as a command: Claude Code, Codex, a
+local agent, a shell. SAGA owns the process group, enforces the runtime
+budget, observes the filesystem and the Git branch, and accepts `check` and
+`emit` requests from cooperating tools. Nothing inside the agent is
+instrumented; SAGA sees effects, not tool calls.
+
+### Deep integrations
+
+Some agents expose structured events before a tool call executes. A thin
+adapter maps those events onto the same canonical event types and the same
+socket, so the policy engine can refuse a supported action before it happens.
+The adapter contains no rules of its own. Claude Code is the first such
+integration; see the [Claude Code guide](claude-code.md). It is optional and
+does not change how generic supervision works.
 
 ## Example: a protected write
 
@@ -135,7 +156,8 @@ The default profile includes:
 | Setting | Default behavior |
 | --- | --- |
 | Protected branches | Refuse startup on `main` and `master`. |
-| Policy file | Treat changes during a run as high-severity tampering. |
+| Policy file | Treat changes during a run as critical tampering (`policy-tamper`, kill). |
+| Integration settings | When a deep integration is active, treat changes to its settings files as tampering (`hook-tamper`, kill). |
 | Git security files | Protect `.git/config`, `.git/hooks/**` and linked-worktree `.git` pointers. |
 | CI workflows | Pause for changes under `.github/workflows/**`. |
 | Secret-like files | Pause for writes to `.env`, `.env.*`, `credentials*`, `secrets*`, `*.pem` and `*.key` at any depth. |
@@ -187,7 +209,10 @@ thresholds. Counters expire with the window.
 
 The detector counts explicit denied/blocked results and policy-denied actions.
 After a denial, credential/tool attempts and related network/Git attempts can
-also contribute. Unrelated normal events do not justify a claim about intent.
+also contribute. Such a follow-up counts once per distinct target within the
+window: repeating the same allowed tool or host is ordinary work, a different
+one is an alternative target. A repeated denial always counts. Unrelated
+normal events do not justify a claim about intent.
 
 A single reported denial is logged. Under the default thresholds, the second
 related event warns, the third pauses, and the fifth kills. Strong policy-tamper
@@ -214,8 +239,15 @@ instrument that CLI's internal tools or network requests.
 saga-watchdog run -- claude
 ```
 
-The same boundary applies: its own permissions remain separate, and additional
-tool observations require an integration that calls `check` or `emit`.
+Without further setup the same generic boundary applies: Claude's own
+permissions remain separate and SAGA sees effects, not tool calls. Install
+the optional hook with `saga-watchdog claude setup` to have Write, Edit,
+MultiEdit, NotebookEdit, Bash, WebFetch and MCP tool calls checked by this
+policy before they execute. The [Claude Code guide](claude-code.md) documents
+the hook contract, the tool mapping and the fail-closed behaviour. When the
+hook is configured, the settings files that carry it (`.claude/settings.json`,
+`.claude/settings.local.json`) are protected for the run like the policy file
+(rule `hook-tamper`, kill).
 
 ## What Watchdog can see
 
@@ -225,6 +257,7 @@ tool observations require an integration that calls `check` or `emit`.
 | Filesystem observer | Covered create/write/rename/delete notifications | After the change; no reliable attribution to a process. |
 | Git awareness | Startup repository/branch/dirty state/remote names, plus periodic branch checks | Does not turn Git into a transaction guard. |
 | Integration socket | Structured actions reported by a wrapper or tool | Producer reports are not independent OS evidence. |
+| Deep integration (Claude Code hook) | Supported tool calls before execution, with tool and agent identifiers | Only tools that pass through the hook; still a producer report. |
 
 A change from your editor can trigger the same rule as an agent change.
 Filesystem notifications can be coalesced or lost, and ignored directories have
@@ -297,8 +330,17 @@ An event has a small canonical shape:
 ```
 
 Optional `metadata` contains a small allowlist of diagnostic fields; arbitrary
-producer metadata and complex values are discarded. Do not use it to transport
-application payloads or secrets.
+producer metadata and complex values are discarded. Every event carries
+`decision`, `reason` and `mode`. Integration events may add bounded lineage
+identifiers supplied by the producer: `producer`, `tool_name`, `agent_id`,
+`agent_type`, `tool_use_id` and `session_id`. They support correlation and
+never influence a decision. Do not use metadata to transport application
+payloads or secrets.
+
+Integration file targets that arrive as absolute paths inside the project are
+evaluated as submitted and recorded by their project-relative name. The run
+record (`run.json`) lists the settings files protected for an active deep
+integration under `controls`.
 
 Logs are local and append-only from Watchdog's perspective. They are not
 tamper-proof against the OS user. Metadata is conservatively redacted; producers
@@ -351,10 +393,15 @@ continues (exit `0`). Observe mode returns `allowed: true` (exit `0`) even when
 the decision records a proposed pause/kill. Transport/protocol failures remain
 errors. Use `allowed` or the CLI exit status to decide whether to proceed.
 
+An event may also carry optional bounded identifiers, each at most 128
+printable ASCII bytes without spaces: `producer`, `tool`, `agent_id`,
+`agent_type`, `call_id` and `session_id`. They are recorded as metadata for
+correlation only. Any other field is rejected.
+
 These are two independent example connections, not a policy update protocol.
 The supervisor assigns decisions and severity. Clients cannot supply policy
-overrides, thresholds, rule decisions, metadata, timestamps or trusted event
-sources. Requests may include `run_id`; lifecycle controls use a separate local
+overrides, thresholds, rule decisions, free-form metadata, timestamps or
+trusted event sources. Requests may include `run_id`; lifecycle controls use a separate local
 control socket. Both endpoints are recorded in the private run manifest.
 
 Network checks only evaluate the configured policy; they do not establish a

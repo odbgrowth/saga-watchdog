@@ -28,7 +28,7 @@ import (
 
 var version = "dev"
 
-const usage = `SAGA Watchdog — local deterministic agent supervisor
+const usage = `SAGA Watchdog: local deterministic agent supervisor
 
 Usage:
   saga-watchdog init | validate | doctor | version

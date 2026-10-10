@@ -1,9 +1,10 @@
 # Acceptance demo
 
-[Back to the overview](../README.md) · [Coding-agent guide](../docs/coding-agent.md)
+[Back to the overview](../README.md) · [Coding-agent guide](../docs/coding-agent.md) · [Claude Code demo](claude-code.md)
 
 Use Linux or macOS with the built binary on `PATH`. These commands create a
-disposable Git repository. No model account or running agent is needed.
+disposable Git repository. No model account or running agent is needed. The
+[Claude Code demo](claude-code.md) covers the preventive hook path.
 
 ## 1. Create the demo project
 
