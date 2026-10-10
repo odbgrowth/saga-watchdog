@@ -290,6 +290,23 @@ func TestHookConfigChangeIsCaughtAtExit(t *testing.T) {
 	}
 }
 
+func TestSiblingSettingsChangeIsCaughtAtExit(t *testing.T) {
+	root := claudeFixture(t, "enforce")
+	// The hook lives in settings.json; the sibling can disable it and is
+	// fingerprinted as well, so a missed notification still surfaces at exit.
+	cmd, out := cliCommand(t, root, "run", "--", "sh", "-c", "printf '{}' > .claude/settings.local.json")
+	if got := exitCode(cmd.Run()); got != 125 {
+		t.Fatalf("exit %d: %s", got, out)
+	}
+	_, r, err := store.Locate(root, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Rule != "agent-config-modification" {
+		t.Fatalf("rule %s: %s", r.Rule, out)
+	}
+}
+
 func TestClaudeSetupConfigAndDoctorCLI(t *testing.T) {
 	root := fixture(t, config.DefaultYAML)
 	bin := t.TempDir()

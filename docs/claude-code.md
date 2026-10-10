@@ -36,7 +36,9 @@ PreToolUse hook  -->  saga-watchdog claude hook   (thin adapter, no rules)
 ```
 
 Independently of that path, the supervisor keeps observing the filesystem,
-the Git branch and the process after each action. The adapter contains no
+the Git branch and the process after each action. When a hook is detected,
+both project settings files are fingerprinted at start and re-checked at
+exit, so a missed filesystem notification cannot hide a change to them. The adapter contains no
 policy of its own: there is no Claude-specific rule set, risk score or
 allowlist. The same `.saga-watchdog.yaml` governs Claude, Codex, the
 filesystem observer and the generic `check` command.

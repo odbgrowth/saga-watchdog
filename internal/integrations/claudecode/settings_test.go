@@ -87,11 +87,13 @@ func TestSetupCreatesAndRefusesUnsafeFiles(t *testing.T) {
 		t.Fatalf("created settings not recognised: %+v", s)
 	}
 	for name, content := range map[string]string{
-		"array":         `[1]`,
-		"hooks-scalar":  `{"hooks": 5}`,
-		"event-object":  `{"hooks":{"PreToolUse":{}}}`,
-		"two-documents": `{} {}`,
-		"truncated":     `{"hooks":`,
+		"array":            `[1]`,
+		"hooks-scalar":     `{"hooks": 5}`,
+		"event-object":     `{"hooks":{"PreToolUse":{}}}`,
+		"two-documents":    `{} {}`,
+		"trailing-brace":   `{} }`,
+		"trailing-bracket": `{} ]`,
+		"truncated":        `{"hooks":`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			p := filepath.Join(t.TempDir(), "settings.json")

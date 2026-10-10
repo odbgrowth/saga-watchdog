@@ -154,3 +154,18 @@ func TestIntegrationControlFilesAreKillLevel(t *testing.T) {
 		t.Fatalf("unexpected control: %+v", d)
 	}
 }
+
+func TestRemovedControlAncestorIsTampering(t *testing.T) {
+	cfg := config.Default()
+	for _, action := range []string{"delete", "rename"} {
+		if d := New(cfg, t.TempDir(), ".claude/settings.json").Evaluate(event.Event{Timestamp: epoch, Type: "file", Action: action, Target: ".claude"}); d.Action != "kill" || d.RuleID != "hook-tamper" {
+			t.Errorf("%s .claude with an active control: %+v, want kill/hook-tamper", action, d)
+		}
+	}
+	if d := New(cfg, t.TempDir(), ".claude/settings.json").Evaluate(event.Event{Timestamp: epoch, Type: "file", Action: "write", Target: ".claude"}); d.Action != "allow" {
+		t.Errorf("touching the directory entry escalated: %+v", d)
+	}
+	if d := New(cfg, t.TempDir()).Evaluate(event.Event{Timestamp: epoch, Type: "file", Action: "rename", Target: ".claude"}); d.Action != "allow" {
+		t.Errorf("inactive integration escalated: %+v", d)
+	}
+}

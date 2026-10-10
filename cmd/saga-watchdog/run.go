@@ -86,9 +86,13 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 	// for this run. They are fingerprinted now, after the observer is live, and
 	// protected like the policy file until the run ends.
 	r.Controls = claudecode.Controls(g.Root)
-	controlsDigest := make(map[string]string, len(r.Controls))
-	for _, name := range r.Controls {
-		controlsDigest[name] = claudecode.Digest(g.Root, []string{name})
+	controlsDigest := map[string]string{}
+	if len(r.Controls) > 0 {
+		// Once a hook is active both project settings files matter: the
+		// sibling can disable it. Fingerprint both, not only the carrier.
+		for _, name := range claudecode.Files {
+			controlsDigest[name] = claudecode.Digest(g.Root, []string{name})
+		}
 	}
 	env := make([]string, 0, len(os.Environ())+2)
 	for _, v := range os.Environ() {
@@ -262,9 +266,9 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 					handle(event.Event{Source: "supervisor", Type: "policy", Action: "tamper", Target: config.Filename, Result: "success"})
 				}
 			}
-			for _, name := range r.Controls {
+			for _, name := range claudecode.Files {
 				// The watcher can miss a notification; the fingerprint cannot.
-				if !stopping && claudecode.Digest(g.Root, []string{name}) != controlsDigest[name] {
+				if digest, ok := controlsDigest[name]; ok && !stopping && claudecode.Digest(g.Root, []string{name}) != digest {
 					handle(event.Event{Source: "supervisor", Type: "file", Action: "write", Target: name, Result: "success"})
 				}
 			}

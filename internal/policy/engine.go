@@ -128,7 +128,9 @@ func (e *Engine) file(ev event.Event, now time.Time) Decision {
 	}
 	for _, name := range []string{lexical, target} {
 		for _, control := range e.controls {
-			if name == control {
+			// Removing or renaming an ancestor (mv .claude .claude.bak) takes the
+			// control with it and yields no event for the file itself.
+			if name == control || (removed && strings.HasPrefix(control, name+"/")) {
 				return decide("kill", "hook-tamper", control+" configures an active preventive integration and changed during the run")
 			}
 		}
@@ -137,7 +139,7 @@ func (e *Engine) file(ev event.Event, now time.Time) Decision {
 			// there (including Claude's own "always allow" save) is reviewed by a
 			// human rather than treated as proof of tampering.
 			for _, settings := range agentSettings {
-				if name == settings {
+				if name == settings || (removed && strings.HasPrefix(settings, name+"/")) {
 					return decide("pause", "agent-config-modification", settings+" changed while a preventive integration is active")
 				}
 			}

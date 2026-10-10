@@ -89,7 +89,9 @@ func readObject(path string) (map[string]any, os.FileMode, error) {
 	if obj == nil {
 		return nil, 0, fmt.Errorf("%s is not a JSON object: null", path)
 	}
-	if d.More() {
+	// More() ignores a stray closing delimiter; a second decode does not.
+	var extra any
+	if err := d.Decode(&extra); !errors.Is(err, io.EOF) {
 		return nil, 0, fmt.Errorf("%s must contain one JSON object", path)
 	}
 	return obj, info.Mode().Perm(), nil
