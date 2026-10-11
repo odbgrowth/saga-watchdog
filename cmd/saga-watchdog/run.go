@@ -157,6 +157,12 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 	if len(r.Controls) > 0 {
 		hooks = "claude-code via " + strings.Join(r.Controls, ", ")
 	}
+	if c.Run.Unattended {
+		hooks += "; unattended (a pause denies checks but does not stop the process)"
+		if len(r.Controls) == 0 {
+			fmt.Fprintln(os.Stderr, "WARNING: run.unattended without a preventive hook: a pause cannot restrain this agent; only kill decisions and the run budget stop it")
+		}
+	}
 	fmt.Fprintf(os.Stderr, "SAGA Watchdog %s\nProject  %s\nRun      %s\nMode     %s\nBranch   %s\nPolicy   %s\nHooks    %s\nStarting %s\n", version, event.Redact(name), r.ID, c.Mode, event.Redact(g.Branch), hash[:12], hooks, event.Redact(r.Agent))
 	timeout := time.NewTimer(c.Run.MaxDuration)
 	defer timeout.Stop()
@@ -205,6 +211,10 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 			fmt.Fprintf(os.Stderr, "WATCHDOG OBSERVE [%s] would %s: %s\n", d.RuleID, d.Action, event.Redact(d.Reason))
 			return
 		}
+		if d.Action == "pause" && r.Status == "paused" && !childExited {
+			// Already paused: the event is recorded, no second announcement.
+			return
+		}
 		fmt.Fprintf(os.Stderr, "WATCHDOG %s [%s] %s\n", strings.ToUpper(d.Action), d.RuleID, event.Redact(d.Reason))
 		if childExited {
 			if d.Action == "pause" || d.Action == "kill" {
@@ -215,7 +225,11 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 		switch d.Action {
 		case "pause":
 			if r.Status != "paused" {
-				if err := process.Pause(); err != nil {
+				if c.Run.Unattended {
+					// No operator will resume. Leave the process group running and
+					// hold the line through denied pre-action checks instead.
+					fmt.Fprintln(os.Stderr, "Unattended run: process left running; every pre-action check is denied until an explicit resume")
+				} else if err := process.Pause(); err != nil {
 					// Natural-exit cleanup can begin before Done is published. Preserve
 					// the actual policy decision instead of replacing it with a control error.
 					if errors.Is(err, supervisor.ErrFinished) || errors.Is(err, supervisor.ErrTerminating) {

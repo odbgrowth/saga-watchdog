@@ -45,6 +45,7 @@ func New(cfg config.Config, root string, controls ...string) *Engine {
 	cfg.Filesystem.Protect = append([]string(nil), cfg.Filesystem.Protect...)
 	cfg.Filesystem.Ignore = append([]string(nil), cfg.Filesystem.Ignore...)
 	cfg.Network.Deny = append([]string(nil), cfg.Network.Deny...)
+	cfg.Tools.Deny = append([]string(nil), cfg.Tools.Deny...)
 	return &Engine{cfg: cfg, root: root, controls: append([]string(nil), controls...)}
 }
 
@@ -84,6 +85,15 @@ func (e *Engine) Evaluate(ev event.Event) Decision {
 		for _, host := range e.cfg.Network.Deny {
 			if strings.EqualFold(strings.TrimSuffix(host, "."), networkHost(ev.Target)) {
 				base = decide("pause", "network-denied", "target hostname is denied by project policy")
+				break
+			}
+		}
+	} else if ev.Type == "tool" {
+		// Canonical tool identifiers are path-like ("server/tool" for MCP), so
+		// the same segment globs as paths apply: "github/*", "*/delete_*".
+		for _, pattern := range e.cfg.Tools.Deny {
+			if Match(pattern, ev.Target) {
+				base = decide("pause", "tool-denied", "tool is denied by project policy")
 				break
 			}
 		}

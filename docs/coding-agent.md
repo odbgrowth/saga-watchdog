@@ -131,6 +131,7 @@ project:
 run:
   max_duration: 2h
   stop_grace_period: 5s
+  unattended: false
 git:
   protected_branches: [main, master]
   allow_protected: false
@@ -144,12 +145,21 @@ escalation:
   kill_after: 5
 network:
   deny: [blocked.example.com]
+tools:
+  deny: [github/delete_repository, 'payments/*']
 ```
 
 `network.deny` is an optional exact-hostname deny list, empty by default. Hostnames
 are normalized from host or URL targets. It governs integration checks only;
 there is no OS network enforcement and no default allow list. Other hosts are
 allowed unless another rule, such as escalation, intervenes.
+
+`tools.deny` is an optional deny list for cooperative `tool` events by their
+canonical identifier: MCP tools as `server/tool`, other tools by name. Entries
+are path-style globs, so `payments/*` denies every tool of one MCP server and
+`*/drop_*` denies a tool name on any server. A match pauses the run
+(`tool-denied`) and denies the check. Like `network.deny` it governs reported
+events only; nothing is intercepted at the OS level.
 
 The default profile includes:
 
@@ -199,6 +209,16 @@ duration still apply. The maximum duration is an explicit run budget, including
 in observe mode. Changing
 the YAML on disk does not switch an active run's mode; start a new run to load a
 new policy.
+
+`run.unattended: true` is for runs nobody is watching, such as `claude -p` in
+a script or CI. A pause then records the decision and marks the run paused,
+but does not stop the process group: there is no operator to resume it, and a
+stopped process would simply wait until the run budget kills it. Enforcement
+continues through the pre-action path instead: every later `check` is denied
+with `run-paused` until an explicit `resume`, so a hooked agent cannot act and
+ends on its own. Kill decisions and the run budget are unchanged. Without a
+preventive hook a pause cannot restrain the agent in this mode; SAGA warns at
+startup.
 
 ## Escalation detection
 

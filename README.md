@@ -171,7 +171,7 @@ authority even though the observer only sends read requests.
 Project        init | validate | doctor
 Run            run -- <command> | status | events | pause | resume | kill
 Integrations   check | emit
-Claude Code    claude config | setup [--local] | doctor | hook
+Claude Code    claude config | setup [--local] | remove [--local] | doctor | hook
 Docker         docker validate | watch | status | events
 ```
 

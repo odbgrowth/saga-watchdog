@@ -145,30 +145,93 @@ func Setup(path string) (bool, error) {
 		return false, nil
 	}
 	obj["hooks"] = hooks
-	data, err := json.MarshalIndent(obj, "", "  ")
+	return true, writeObject(path, obj, perm)
+}
+
+// Remove deletes every hook entry that runs the SAGA command from one Claude
+// settings file. Other hooks in the same group, other groups and all other
+// keys are kept; emptied groups and an emptied "hooks" object are dropped.
+// A missing or unconfigured file is reported as unchanged.
+func Remove(path string) (bool, error) {
+	obj, perm, err := readObject(path)
 	if err != nil {
 		return false, err
 	}
+	hooks, ok := obj["hooks"].(map[string]any)
+	if !ok {
+		return false, nil
+	}
+	changed := false
+	for name, groups := range hooks {
+		list, ok := groups.([]any)
+		if !ok {
+			continue
+		}
+		var kept []any
+		for _, g := range list {
+			group, _ := g.(map[string]any)
+			entries, _ := group["hooks"].([]any)
+			var keptHooks []any
+			for _, h := range entries {
+				hook, _ := h.(map[string]any)
+				if hook["command"] == Command {
+					changed = true
+					continue
+				}
+				keptHooks = append(keptHooks, h)
+			}
+			if len(entries) > 0 && len(keptHooks) == 0 {
+				continue
+			}
+			if len(keptHooks) != len(entries) {
+				group["hooks"] = keptHooks
+			}
+			kept = append(kept, g)
+		}
+		if len(kept) == 0 {
+			delete(hooks, name)
+		} else {
+			hooks[name] = kept
+		}
+	}
+	if !changed {
+		return false, nil
+	}
+	if len(hooks) == 0 {
+		delete(obj, "hooks")
+	} else {
+		obj["hooks"] = hooks
+	}
+	return true, writeObject(path, obj, perm)
+}
+
+// writeObject replaces path atomically with the indented JSON of obj, keeping
+// the file mode it was read with.
+func writeObject(path string, obj map[string]any, perm os.FileMode) error {
+	data, err := json.MarshalIndent(obj, "", "  ")
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return false, err
+		return err
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".settings-")
 	if err != nil {
-		return false, err
+		return err
 	}
 	defer os.Remove(tmp.Name())
 	if _, err := tmp.Write(append(data, '\n')); err != nil {
 		tmp.Close()
-		return false, err
+		return err
 	}
 	if err := tmp.Chmod(perm); err != nil {
 		tmp.Close()
-		return false, err
+		return err
 	}
 	if err := tmp.Close(); err != nil {
-		return false, err
+		return err
 	}
-	return true, os.Rename(tmp.Name(), path)
+	return os.Rename(tmp.Name(), path)
 }
 
 // Status describes one settings file's relationship to the SAGA hook.

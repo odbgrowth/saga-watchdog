@@ -77,3 +77,18 @@ func TestDefaultsAreIndependent(t *testing.T) {
 		t.Fatal("default slices were shared")
 	}
 }
+
+func TestToolsDenyAndUnattended(t *testing.T) {
+	c, err := Parse(strings.NewReader("version: 1\nprofile: coding-agent\nmode: enforce\nrun:\n  unattended: true\ntools:\n  deny: [github/delete_repository, 'payments/*']\n"))
+	if err != nil || !c.Run.Unattended || len(c.Tools.Deny) != 2 {
+		t.Fatalf("unattended/tools.deny not parsed: %+v %v", c, err)
+	}
+	if Default().Run.Unattended || len(Default().Tools.Deny) != 0 {
+		t.Fatal("defaults must be attended with an empty tools.deny")
+	}
+	for _, bad := range []string{"tools:\n  deny: ['/abs']\n", "tools:\n  deny: ['a/../b']\n", "tools:\n  deny: ['']\n", "tools:\n  deny: 'x'\n"} {
+		if _, err := Parse(strings.NewReader("version: 1\nprofile: coding-agent\nmode: enforce\n" + bad)); err == nil {
+			t.Errorf("accepted %q", bad)
+		}
+	}
+}

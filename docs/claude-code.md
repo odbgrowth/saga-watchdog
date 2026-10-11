@@ -170,6 +170,14 @@ A pause stops the whole process group, including Claude and the hook that
 is still answering. The denial is delivered when the operator resumes, and
 the tool call stays blocked. SAGA never resumes a run on its own.
 
+For runs nobody watches, such as `claude -p` in a script, set
+`run.unattended: true` in `.saga-watchdog.yaml`. A pause then leaves Claude
+running and delivers the denial immediately; every later tool call is denied
+with `run-paused` until an explicit resume, so Claude reports the block and
+finishes instead of hanging until the run budget expires. Verified with
+Claude Code 2.1.296 in headless mode: Claude quotes the SAGA message, does
+not retry, and exits normally.
+
 ## 9. Post-action reporting
 
 `PostToolUse` and `PostToolUseFailure` send an `emit` with `result: success`
@@ -195,6 +203,10 @@ Escalation note: after a denial, a `tool` event with a target not yet seen in
 the window counts as a related follow-up (second related event warns, third
 pauses, fifth kills by default). `process` events for Bash do not. Adjust
 `escalation` thresholds in the policy if MCP-heavy sessions trip this early.
+
+To refuse specific MCP tools outright, list them under `tools.deny` in the
+policy by canonical identifier, with path-style globs: `github/delete_*`,
+`payments/*`. A match is blocked before execution (`tool-denied`).
 
 ## 11. Observe mode
 
@@ -305,6 +317,12 @@ is idempotent and reports whether the stored hooks changed.
   raw sockets are not interpreted; their file effects are observed after the
   fact.
 - Only matched tools are checked. File reads are invisible.
+- Claude often prefers Bash for simple file work: in a headless test it
+  created a file with a shell command rather than the Write tool. Such
+  writes are seen only after the fact by the filesystem observer. For a
+  tighter boundary, add Claude's own permission deny rules for the shell
+  patterns you care about (for example `Bash(* > .env*)`) alongside SAGA;
+  SAGA deliberately does not interpret shell commands.
 - The adapter and the supervisor run as the same OS user as Claude. This is
   policy enforcement for a cooperating runtime, not a privilege boundary.
 - Claude Code honours exit 2 and `onFailure: "block"` according to its
@@ -318,9 +336,16 @@ Read [SECURITY.md](../SECURITY.md) for the full threat model.
 
 ## 19. Disabling or uninstalling
 
-Stop the supervised run, then remove the four `saga-watchdog claude hook`
-groups from `.claude/settings.json` or `.claude/settings.local.json`, either
-in an editor or through `/hooks` in Claude Code. Do not edit those files
-while a supervised run is active: that is a hook-tamper event. Running
-`claude` without the hook keeps generic supervision and observation when
-started through `saga-watchdog run -- claude`.
+Stop the supervised run, then:
+
+```sh
+saga-watchdog claude remove            # .claude/settings.json
+saga-watchdog claude remove --local    # .claude/settings.local.json
+```
+
+`remove` deletes only the hook entries that run `saga-watchdog claude hook`;
+other hooks, including ones sharing a group with SAGA, and every other key
+stay as they are. Removing by hand or through `/hooks` in Claude Code works
+too. Do not edit those files while a supervised run is active: that is a
+hook-tamper event. Running `claude` without the hook keeps generic
+supervision and observation when started through `saga-watchdog run -- claude`.
