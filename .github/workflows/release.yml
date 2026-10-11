@@ -63,6 +63,8 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+      - name: Verify README and SECURITY.md name this release
+        run: scripts/check-release-refs.sh "$RELEASE_TAG"
       - name: Create the release tag on this commit (manual runs)
         if: github.event_name == 'workflow_dispatch'
         env:

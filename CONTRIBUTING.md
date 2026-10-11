@@ -115,7 +115,9 @@ Before tagging a release, maintainers should:
 2. Verify private vulnerability reporting and review the documented
    limitations.
 3. Update the README's release status and installation instructions, and the
-   supported-version policy in `SECURITY.md`.
+   supported-version policy in `SECURITY.md`. CI checks that the three
+   references agree, and the Release workflow refuses to tag a version they
+   do not name: `scripts/check-release-refs.sh vX.Y.Z` runs the same check.
 4. Create a reviewed `vX.Y.Z` tag on the tested commit, or run the Release
    workflow manually (Actions, Release, "Run workflow") with that version:
    it creates the tag on the chosen ref before building.
