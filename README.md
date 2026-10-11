@@ -175,7 +175,7 @@ authority even though the observer only sends read requests.
 
 ```text
 Project        init | validate | doctor
-Run            run -- <command> | status | events | report [--json] | pause | resume | kill
+Run            run -- <command> | status | events | report [--json] | pause | resume | kill | grant
 Integrations   check | emit
 Claude Code    claude config | setup [--local] | remove [--local] | doctor | hook
 Codex CLI      codex  config | setup | remove | doctor | hook

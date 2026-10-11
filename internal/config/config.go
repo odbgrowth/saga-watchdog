@@ -57,14 +57,25 @@ type Escalation struct {
 	PauseAfter int           `yaml:"pause_after"`
 	KillAfter  int           `yaml:"kill_after"`
 }
+
+// Network governs cooperative network checks by hostname. In denylist mode
+// (the default) every host is allowed unless denied. In allowlist mode a host
+// must be listed in Allow, or granted for the run by an operator, or the check
+// pauses the run. Deny always wins. An Allow entry starting with "." matches
+// that domain and every subdomain.
 type Network struct {
-	Deny []string `yaml:"deny"`
+	Mode  string   `yaml:"mode"`
+	Allow []string `yaml:"allow"`
+	Deny  []string `yaml:"deny"`
 }
 
-// Tools denies cooperative tool calls by their canonical identifier, such as
-// an MCP tool "server/tool" or a tool name, with path-style globs.
+// Tools governs cooperative tool calls by their canonical identifier, such as
+// an MCP tool "server/tool" or a tool name, with path-style globs. Modes work
+// as for Network.
 type Tools struct {
-	Deny []string `yaml:"deny"`
+	Mode  string   `yaml:"mode"`
+	Allow []string `yaml:"allow"`
+	Deny  []string `yaml:"deny"`
 }
 
 // Default returns fresh slices so one project's overrides cannot change another.
@@ -79,6 +90,8 @@ func Default() Config {
 			DeleteThreshold: 100, DeleteWindow: 10 * time.Second,
 		},
 		Escalation: Escalation{Window: 120 * time.Second, WarnAfter: 2, PauseAfter: 3, KillAfter: 5},
+		Network:    Network{Mode: "denylist"},
+		Tools:      Tools{Mode: "denylist"},
 	}
 }
 
@@ -197,29 +210,51 @@ func (c Config) Validate() error {
 			return fmt.Errorf("git.protected_branches: %w", err)
 		}
 	}
-	if len(c.Tools.Deny) > 256 {
-		return errors.New("tools.deny supports at most 256 patterns")
+	if c.Tools.Mode != "denylist" && c.Tools.Mode != "allowlist" {
+		return errors.New("tools.mode must be denylist or allowlist")
 	}
-	for _, pattern := range c.Tools.Deny {
-		if err := validPattern(pattern); err != nil {
-			return fmt.Errorf("tools.deny: %w", err)
+	for field, patterns := range map[string][]string{"tools.deny": c.Tools.Deny, "tools.allow": c.Tools.Allow} {
+		if len(patterns) > 256 {
+			return fmt.Errorf("%s supports at most 256 patterns", field)
 		}
-	}
-	if len(c.Network.Deny) > 256 {
-		return errors.New("network.deny supports at most 256 hostnames")
-	}
-	for _, host := range c.Network.Deny {
-		if host == "" || len(host) > 253 || strings.ContainsAny(host, " /\\*?@:#\r\n\t") {
-			return errors.New("network.deny must contain exact hostnames without ports, URL schemes, or wildcards")
-		}
-		for _, label := range strings.Split(strings.TrimSuffix(host, "."), ".") {
-			if len(label) == 0 || len(label) > 63 || strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
-				return errors.New("network.deny contains an invalid hostname label")
+		for _, pattern := range patterns {
+			if err := validPattern(pattern); err != nil {
+				return fmt.Errorf("%s: %w", field, err)
 			}
-			for _, r := range label {
-				if !(r >= 'a' && r <= 'z') && !(r >= 'A' && r <= 'Z') && !(r >= '0' && r <= '9') && r != '-' {
-					return errors.New("network.deny hostnames must use ASCII letters, digits and hyphens (use punycode for international names)")
-				}
+		}
+	}
+	if c.Network.Mode != "denylist" && c.Network.Mode != "allowlist" {
+		return errors.New("network.mode must be denylist or allowlist")
+	}
+	for field, hosts := range map[string][]string{"network.deny": c.Network.Deny, "network.allow": c.Network.Allow} {
+		if len(hosts) > 256 {
+			return fmt.Errorf("%s supports at most 256 hostnames", field)
+		}
+		for _, host := range hosts {
+			// Only the allow list accepts a leading dot: ".example.com" covers the
+			// domain and its subdomains. Denials stay exact.
+			if field == "network.allow" {
+				host = strings.TrimPrefix(host, ".")
+			}
+			if err := validHost(host); err != nil {
+				return fmt.Errorf("%s: %w", field, err)
+			}
+		}
+	}
+	return nil
+}
+
+func validHost(host string) error {
+	if host == "" || len(host) > 253 || strings.ContainsAny(host, " /\\*?@:#\r\n\t") {
+		return errors.New("hostnames must be exact, without ports, URL schemes or wildcards")
+	}
+	for _, label := range strings.Split(strings.TrimSuffix(host, "."), ".") {
+		if len(label) == 0 || len(label) > 63 || strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
+			return errors.New("invalid hostname label")
+		}
+		for _, r := range label {
+			if !(r >= 'a' && r <= 'z') && !(r >= 'A' && r <= 'Z') && !(r >= '0' && r <= '9') && r != '-' {
+				return errors.New("hostnames must use ASCII letters, digits and hyphens (use punycode for international names)")
 			}
 		}
 	}

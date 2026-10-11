@@ -37,6 +37,7 @@ Usage:
   saga-watchdog events [--run ID]
   saga-watchdog report [--run ID] [--json]
   saga-watchdog pause|resume|kill <run-id>
+  saga-watchdog grant [--run ID] network <host> | tool <server/tool>
   saga-watchdog check --type TYPE --action ACTION --target TARGET [--run ID]
   saga-watchdog emit --type TYPE --action ACTION --target TARGET --result RESULT [--run ID]
   saga-watchdog claude config | setup [--local] | remove [--local] | doctor
@@ -83,7 +84,7 @@ func cli(args []string) int {
 	g, err := gitinfo.Inspect(cwd)
 	if err != nil {
 		switch args[0] {
-		case "status", "events", "report", "check", "emit", "pause", "resume", "kill":
+		case "status", "events", "report", "check", "emit", "pause", "resume", "kill", "grant":
 			// Controls must still work from the original project root if Git metadata
 			// was deleted or corrupted. They contact a live supervisor, never a PID.
 			root, resolveErr := filepath.EvalSymlinks(cwd)
@@ -137,6 +138,8 @@ func cli(args []string) int {
 		return run(g, c, hash, args[2:])
 	case "status", "events", "report", "check", "emit":
 		return query(g, args[0], args[1:])
+	case "grant":
+		return grant(g, args[1:])
 	case "pause", "resume", "kill":
 		if len(args) != 2 {
 			return fail(fmt.Errorf("usage: saga-watchdog %s <run-id>", args[0]))
@@ -325,6 +328,36 @@ func printRun(r store.Run) {
 	if r.Reason != "" {
 		fmt.Printf("Rule      %s\nReason    %s\n", r.Rule, event.Redact(r.Reason))
 	}
+	if len(r.Grants) > 0 {
+		fmt.Printf("Grants    %s\n", event.Redact(strings.Join(r.Grants, ", ")))
+	}
+}
+
+// grant authorizes one network host or tool identifier for the rest of a run
+// through the control socket. It is the operator's answer to a run paused by
+// network-unlisted or tool-unlisted; the run still needs an explicit resume.
+func grant(g gitinfo.Info, args []string) int {
+	f := flag.NewFlagSet("grant", flag.ContinueOnError)
+	id := f.String("run", "", "run ID (latest in this project by default)")
+	if err := f.Parse(args); err != nil {
+		return 2
+	}
+	if f.NArg() != 2 || (f.Arg(0) != "network" && f.Arg(0) != "tool") {
+		return fail(errors.New("usage: saga-watchdog grant [--run ID] network <host> | tool <server/tool>"))
+	}
+	_, r, err := store.Locate(g.Root, *id)
+	if err != nil {
+		return fail(err)
+	}
+	response, err := socket.Send(r.Control, socket.Request{Operation: "grant", RunID: r.ID, Event: socket.Input{Type: f.Arg(0), Target: f.Arg(1)}})
+	if err != nil {
+		return fail(err)
+	}
+	if response.Run != nil {
+		printRun(*response.Run)
+	}
+	fmt.Printf("Granted for this run only. If the run is paused: saga-watchdog resume %s\n", r.ID)
+	return 0
 }
 
 func permits(mode string, d policy.Decision) bool {

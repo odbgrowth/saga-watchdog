@@ -367,6 +367,26 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 			case "status":
 				snapshot := r
 				call.Reply <- socket.Response{Allowed: true, Run: &snapshot}
+			case "grant":
+				// An operator widens this run's authority by one host or tool. The
+				// grant is audited before it takes effect and never overrides a
+				// deny entry.
+				target := request.Event.Target
+				if request.Event.Type == "network" {
+					target = strings.ToLower(strings.TrimSuffix(target, "."))
+				}
+				if err := record(event.Event{Source: "control", Type: "process", Action: "grant", Target: request.Event.Type + " " + target, Result: "requested"}, policy.Decision{Action: "allow", Severity: "info"}); err != nil {
+					call.Reply <- socket.Response{Error: "audit unavailable"}
+					stop(err.Error(), "audit-failed")
+					continue
+				}
+				if !engine.Grant(request.Event.Type, target) {
+					call.Reply <- socket.Response{Error: "grant refused: unsupported target or grant limit reached"}
+					continue
+				}
+				r.Grants = append(r.Grants, request.Event.Type+" "+target)
+				snapshot := r
+				call.Reply <- socket.Response{Allowed: true, Run: &snapshot}
 			case "pause", "resume", "kill":
 				if err := record(event.Event{Source: "control", Type: "process", Action: request.Operation, Target: r.ID, Result: "requested"}, policy.Decision{Action: "allow", Severity: "info"}); err != nil {
 					call.Reply <- socket.Response{Error: "audit unavailable"}

@@ -2,6 +2,7 @@ package policy
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -190,5 +191,75 @@ func TestToolDenyPatterns(t *testing.T) {
 	}
 	if d := New(cfg, t.TempDir()).Evaluate(event.Event{Timestamp: epoch, Type: "process", Action: "execute", Target: "payments/refund"}); d.Action != "allow" {
 		t.Fatalf("tools.deny applied to a non-tool event: %+v", d)
+	}
+}
+
+func TestAllowListModesAndGrants(t *testing.T) {
+	cfg := config.Default()
+	cfg.Network.Mode, cfg.Network.Allow, cfg.Network.Deny = "allowlist", []string{"api.github.com", ".pypi.org"}, []string{"files.pypi.org"}
+	cfg.Tools.Mode, cfg.Tools.Allow, cfg.Tools.Deny = "allowlist", []string{"github/*"}, []string{"github/delete_repository"}
+	network := func(target string) event.Event {
+		return event.Event{Timestamp: epoch, Type: "network", Action: "connect", Target: target}
+	}
+	tool := func(target string) event.Event {
+		return event.Event{Timestamp: epoch, Type: "tool", Action: "call", Target: target}
+	}
+	for name, tc := range map[string]struct {
+		ev   event.Event
+		rule string
+	}{
+		"listed host":        {network("https://API.github.com/repos"), ""},
+		"suffix apex":        {network("pypi.org"), ""},
+		"suffix subdomain":   {network("mirror.pypi.org:443"), ""},
+		"unlisted host":      {network("bit.ly"), "network-unlisted"},
+		"lookalike":          {network("api.github.com.attacker.test"), "network-unlisted"},
+		"deny wins":          {network("files.pypi.org"), "network-denied"},
+		"listed tool":        {tool("github/get_issue"), ""},
+		"unlisted tool":      {tool("payments/charge"), "tool-unlisted"},
+		"denied listed tool": {tool("github/delete_repository"), "tool-denied"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := New(cfg, t.TempDir()).Evaluate(tc.ev)
+			if tc.rule == "" && d.Action != "allow" {
+				t.Fatalf("%+v", d)
+			}
+			if tc.rule != "" && (d.Action != "pause" || d.RuleID != tc.rule) {
+				t.Fatalf("%+v", d)
+			}
+		})
+	}
+	e := New(cfg, t.TempDir())
+	if !e.Grant("network", "https://BIT.ly/x") || !e.Grant("tool", "payments/charge") || e.Grant("file", "x") || e.Grant("network", "") {
+		t.Fatal("grant acceptance")
+	}
+	if d := e.Evaluate(network("bit.ly")); d.Action != "allow" {
+		t.Fatalf("granted host still blocked: %+v", d)
+	}
+	if d := e.Evaluate(tool("payments/charge")); d.Action != "allow" {
+		t.Fatalf("granted tool still blocked: %+v", d)
+	}
+	if d := e.Evaluate(network("www.bit.ly")); d.RuleID != "network-unlisted" {
+		t.Fatalf("grant must be exact: %+v", d)
+	}
+	e.Grant("network", "files.pypi.org")
+	if d := e.Evaluate(network("files.pypi.org")); d.RuleID != "network-denied" {
+		t.Fatalf("grant overrode a deny entry: %+v", d)
+	}
+	for i := 0; i < maxGrants+5; i++ {
+		e.Grant("tool", fmt.Sprintf("srv/tool%d", i))
+	}
+	if len(e.grants) > maxGrants {
+		t.Fatalf("grants unbounded: %d", len(e.grants))
+	}
+	// A retry of the same host in URL form is a repeat, not an alternative target.
+	e = New(cfg, t.TempDir())
+	e.Evaluate(network("https://bit.ly/x"))
+	if d := e.Evaluate(network("bit.ly")); d.RuleID != "network-unlisted" || !strings.Contains(d.Reason, "allow list") {
+		t.Fatalf("repeat counted as alternative target: %+v", d)
+	}
+	// Denylist mode is unchanged: unlisted hosts and tools stay allowed.
+	cfg.Network.Mode, cfg.Tools.Mode = "denylist", "denylist"
+	if d := New(cfg, t.TempDir()).Evaluate(network("bit.ly")); d.Action != "allow" {
+		t.Fatalf("%+v", d)
 	}
 }

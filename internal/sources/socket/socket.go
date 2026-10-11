@@ -77,11 +77,23 @@ func Validate(r Request, controls bool) error {
 	if controls {
 		switch r.Operation {
 		case "status", "pause", "resume", "kill":
+			if r.Event != (Input{}) {
+				return errors.New("control request must not contain an event")
+			}
+		case "grant":
+			// A grant names one host or tool for the rest of the run; it carries
+			// no action, result or lineage.
+			if r.Event.Type != "network" && r.Event.Type != "tool" {
+				return errors.New("grant applies to network or tool targets")
+			}
+			if r.Event.Target == "" || len(r.Event.Target) > 4096 || strings.ContainsAny(r.Event.Target, "\x00\r\n") {
+				return errors.New("grant requires a target without control characters")
+			}
+			if r.Event.Action != "" || r.Event.Result != "" || len(r.Event.Lineage()) != 0 {
+				return errors.New("grant carries only a type and a target")
+			}
 		default:
 			return errors.New("unsupported control operation")
-		}
-		if r.Event != (Input{}) {
-			return errors.New("control request must not contain an event")
 		}
 		return nil
 	}
