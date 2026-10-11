@@ -241,3 +241,60 @@ func TestReadObjectRejectsNullSymlinkedParentAndAsyncHooks(t *testing.T) {
 		t.Fatalf("symlinked .claude inspected as valid: %+v", s)
 	}
 }
+
+func TestRemoveDeletesOnlySagaHooks(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	existing := `{"permissions":{"allow":["Bash(go test *)"]},"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"echo hi"}]}],"Stop":[{"hooks":[{"type":"command","command":"echo done"}]}]}}`
+	if err := os.WriteFile(path, []byte(existing), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := Setup(path); err != nil || !changed {
+		t.Fatalf("setup: %v %v", changed, err)
+	}
+	// Put a SAGA entry inside the user's own group too: only that entry may go.
+	obj := readJSON(t, path)
+	group := obj["hooks"].(map[string]any)["PreToolUse"].([]any)[0].(map[string]any)
+	group["hooks"] = append(group["hooks"].([]any), map[string]any{"type": "command", "command": Command})
+	data, _ := json.Marshal(obj)
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := Remove(path); err != nil || !changed {
+		t.Fatalf("remove: %v %v", changed, err)
+	}
+	obj = readJSON(t, path)
+	if obj["permissions"] == nil {
+		t.Fatal("permissions lost")
+	}
+	hooks := obj["hooks"].(map[string]any)
+	pre := hooks["PreToolUse"].([]any)
+	if len(pre) != 1 || len(pre[0].(map[string]any)["hooks"].([]any)) != 1 || pre[0].(map[string]any)["hooks"].([]any)[0].(map[string]any)["command"] != "echo hi" {
+		t.Fatalf("user's PreToolUse hook damaged: %v", pre)
+	}
+	if hooks["Stop"] == nil || hooks["PostToolUse"] != nil || hooks["PostToolUseFailure"] != nil || hooks["ConfigChange"] != nil {
+		t.Fatalf("hook events after remove: %v", hooks)
+	}
+	if s := Inspect(dir)[0]; s.Configured {
+		t.Fatalf("still configured: %+v", s)
+	}
+	if changed, err := Remove(path); err != nil || changed {
+		t.Fatalf("second remove: %v %v", changed, err)
+	}
+	local := filepath.Join(dir, ".claude", "settings.local.json")
+	if changed, err := Remove(local); err != nil || changed {
+		t.Fatalf("remove on a missing file: %v %v", changed, err)
+	}
+	if _, err := Setup(local); err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := Remove(local); err != nil || !changed {
+		t.Fatalf("remove after setup: %v %v", changed, err)
+	}
+	if _, ok := readJSON(t, local)["hooks"]; ok {
+		t.Fatal("emptied hooks object kept")
+	}
+}

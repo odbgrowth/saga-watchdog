@@ -27,6 +27,7 @@ type Config struct {
 	Filesystem Filesystem `yaml:"filesystem"`
 	Escalation Escalation `yaml:"escalation"`
 	Network    Network    `yaml:"network"`
+	Tools      Tools      `yaml:"tools"`
 }
 
 type Project struct {
@@ -35,6 +36,10 @@ type Project struct {
 type Run struct {
 	MaxDuration     time.Duration `yaml:"max_duration"`
 	StopGracePeriod time.Duration `yaml:"stop_grace_period"`
+	// Unattended keeps a paused run's process group running: no operator is
+	// present to resume, so enforcement continues through denied pre-action
+	// checks while the agent is left to finish or exit on its own.
+	Unattended bool `yaml:"unattended"`
 }
 type Git struct {
 	ProtectedBranches []string `yaml:"protected_branches"`
@@ -53,6 +58,12 @@ type Escalation struct {
 	KillAfter  int           `yaml:"kill_after"`
 }
 type Network struct {
+	Deny []string `yaml:"deny"`
+}
+
+// Tools denies cooperative tool calls by their canonical identifier, such as
+// an MCP tool "server/tool" or a tool name, with path-style globs.
+type Tools struct {
 	Deny []string `yaml:"deny"`
 }
 
@@ -184,6 +195,14 @@ func (c Config) Validate() error {
 		}
 		if err := validPattern(branch); err != nil {
 			return fmt.Errorf("git.protected_branches: %w", err)
+		}
+	}
+	if len(c.Tools.Deny) > 256 {
+		return errors.New("tools.deny supports at most 256 patterns")
+	}
+	for _, pattern := range c.Tools.Deny {
+		if err := validPattern(pattern); err != nil {
+			return fmt.Errorf("tools.deny: %w", err)
 		}
 	}
 	if len(c.Network.Deny) > 256 {

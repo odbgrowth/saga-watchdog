@@ -23,7 +23,7 @@ import (
 // on Git inspection, so it is dispatched before any repository lookup.
 func claudeCLI(args []string) int {
 	if len(args) == 0 {
-		return fail(errors.New("usage: saga-watchdog claude hook|config|setup [--local]|doctor"))
+		return fail(errors.New("usage: saga-watchdog claude hook|config|setup [--local]|remove [--local]|doctor"))
 	}
 	switch args[0] {
 	case "hook":
@@ -38,9 +38,9 @@ func claudeCLI(args []string) int {
 		os.Stdout.Write(claudecode.SettingsJSON())
 		fmt.Fprintln(os.Stderr, "Merge this into .claude/settings.json in the project, or run: saga-watchdog claude setup")
 		return 0
-	case "setup", "doctor":
+	case "setup", "remove", "doctor":
 	default:
-		return fail(fmt.Errorf("unknown claude command %q; use hook, config, setup or doctor", args[0]))
+		return fail(fmt.Errorf("unknown claude command %q; use hook, config, setup, remove or doctor", args[0]))
 	}
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -60,8 +60,8 @@ func claudeCLI(args []string) int {
 		}
 		return claudeDoctor(g, c)
 	}
-	f := flag.NewFlagSet("claude setup", flag.ContinueOnError)
-	local := f.Bool("local", false, "write .claude/settings.local.json (gitignored) instead of .claude/settings.json")
+	f := flag.NewFlagSet("claude "+args[0], flag.ContinueOnError)
+	local := f.Bool("local", false, "use .claude/settings.local.json (gitignored) instead of .claude/settings.json")
 	if err := f.Parse(args[1:]); err != nil {
 		return 2
 	}
@@ -73,6 +73,19 @@ func claudeCLI(args []string) int {
 		name = claudecode.Files[1]
 	}
 	path := filepath.Join(g.Root, filepath.FromSlash(name))
+	if args[0] == "remove" {
+		changed, err := claudecode.Remove(path)
+		if err != nil {
+			return fail(fmt.Errorf("existing settings are preserved: %w", err))
+		}
+		if changed {
+			fmt.Println("Removed the SAGA hooks from", path)
+		} else {
+			fmt.Println("No SAGA hooks in", path)
+		}
+		fmt.Println("Do this only between runs; changing the file during a supervised run is hook tampering")
+		return 0
+	}
 	changed, err := claudecode.Setup(path)
 	if err != nil {
 		return fail(fmt.Errorf("existing settings are preserved: %w", err))

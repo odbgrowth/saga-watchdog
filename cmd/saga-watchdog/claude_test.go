@@ -354,3 +354,62 @@ func TestClaudeSetupConfigAndDoctorCLI(t *testing.T) {
 		t.Fatalf("local setup: %d %s", code, out)
 	}
 }
+
+func TestUnattendedRunDeniesWithoutStopping(t *testing.T) {
+	root := fixture(t, "version: 1\nprofile: coding-agent\nmode: enforce\nrun:\n  max_duration: 20s\n  stop_grace_period: 50ms\n  unattended: true\n")
+	if _, err := claudecode.Setup(filepath.Join(root, ".claude", "settings.json")); err != nil {
+		t.Fatal(err)
+	}
+	script := hookScript + `
+h "$(pre Edit '{"file_path":"'"$PWD"'/.env","old_string":"a","new_string":"b"}' 1 '')" env-blocked
+echo alive=1 >> codes.txt
+h "$(pre Write '{"file_path":"'"$PWD"'/src/ok.go","content":"x"}' 2 '')" after-pause
+`
+	cmd, out := cliCommand(t, root, "run", "--", "bash", "-c", script)
+	cmd.Env = append(cmd.Env, "SAGA_TEST_BIN="+os.Args[0])
+	if got := exitCode(cmd.Run()); got != 0 {
+		t.Fatalf("unattended run exit %d: %s", got, out)
+	}
+	got := codes(t, root)
+	for label, want := range map[string]string{"env-blocked": "2", "alive": "1", "after-pause": "2"} {
+		if got[label] != want {
+			t.Errorf("%s = %q, want %s (%v)", label, got[label], want, got)
+		}
+	}
+	if stderr := string(mustRead(t, filepath.Join(root, "all.err"))); !strings.Contains(stderr, "run is paused") {
+		t.Fatalf("later check not denied as paused: %s", stderr)
+	}
+	if !strings.Contains(out.String(), "Unattended run") {
+		t.Fatalf("unattended pause not announced: %s", out)
+	}
+	_, r, err := store.Locate(root, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Pauses != 1 || r.Status != "completed" {
+		t.Fatalf("run record: %+v", r)
+	}
+}
+
+func TestClaudeRemoveCLI(t *testing.T) {
+	root := fixture(t, config.DefaultYAML)
+	run := func(args ...string) (int, string) {
+		cmd, out := cliCommand(t, root, args...)
+		return exitCode(cmd.Run()), out.String()
+	}
+	if code, out := run("claude", "setup"); code != 0 {
+		t.Fatalf("setup: %d %s", code, out)
+	}
+	if code, out := run("claude", "remove"); code != 0 || !strings.Contains(out, "Removed the SAGA hooks") {
+		t.Fatalf("remove: %d %s", code, out)
+	}
+	if data := mustRead(t, filepath.Join(root, ".claude", "settings.json")); strings.Contains(string(data), claudecode.Command) {
+		t.Fatalf("hook still present: %s", data)
+	}
+	if code, out := run("claude", "remove"); code != 0 || !strings.Contains(out, "No SAGA hooks") {
+		t.Fatalf("second remove: %d %s", code, out)
+	}
+	if code, out := run("claude", "remove", "--local"); code != 0 || !strings.Contains(out, "No SAGA hooks") {
+		t.Fatalf("remove --local on a missing file: %d %s", code, out)
+	}
+}

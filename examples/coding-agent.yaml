@@ -10,6 +10,9 @@ project:
 run:
   max_duration: 2h
   stop_grace_period: 5s
+  # Unattended runs (CI, scripts): a pause denies further pre-action checks
+  # but leaves the process running, since nobody is there to resume it.
+  unattended: false
 
 git:
   protected_branches: [main, master]
@@ -34,3 +37,7 @@ network:
   # Empty by default. This does not block operating-system network traffic.
   deny: [blocked.example.com]
 
+tools:
+  # Optional deny list for cooperative tool calls by canonical identifier:
+  # MCP tools as server/tool, other tools by name. Path-style globs apply.
+  deny: [github/delete_repository, 'payments/*']

@@ -38,7 +38,7 @@ Usage:
   saga-watchdog pause|resume|kill <run-id>
   saga-watchdog check --type TYPE --action ACTION --target TARGET [--run ID]
   saga-watchdog emit --type TYPE --action ACTION --target TARGET --result RESULT [--run ID]
-  saga-watchdog claude config | setup [--local] | doctor
+  saga-watchdog claude config | setup [--local] | remove [--local] | doctor
   saga-watchdog claude hook            (run by Claude Code hooks; reads stdin)
   saga-watchdog docker validate|watch|status|events --config FILE
   saga-watchdog docker watch --config FILE --once

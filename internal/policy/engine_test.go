@@ -175,3 +175,20 @@ func TestRelatedFollowUpsCountOncePerTarget(t *testing.T) {
 		}
 	}
 }
+
+func TestToolDenyPatterns(t *testing.T) {
+	cfg := config.Default()
+	cfg.Tools.Deny = []string{"github/delete_repository", "payments/*", "*/drop_*"}
+	for target, want := range map[string]string{
+		"github/delete_repository": "pause", "payments/refund": "pause", "db/drop_table": "pause",
+		"github/get_issue": "allow", "FooBar": "allow", "payments": "allow",
+	} {
+		d := New(cfg, t.TempDir()).Evaluate(event.Event{Timestamp: epoch, Type: "tool", Action: "call", Target: target})
+		if d.Action != want || (want == "pause" && d.RuleID != "tool-denied") {
+			t.Errorf("%s: %+v, want %s", target, d, want)
+		}
+	}
+	if d := New(cfg, t.TempDir()).Evaluate(event.Event{Timestamp: epoch, Type: "process", Action: "execute", Target: "payments/refund"}); d.Action != "allow" {
+		t.Fatalf("tools.deny applied to a non-tool event: %+v", d)
+	}
+}
