@@ -275,12 +275,22 @@ func (s *Spec) Inspect(root string) []Status {
 	return out
 }
 
-// Controls returns the configuration files that currently reference the SAGA
-// hook. They are the files whose change during a run must count as tampering.
+// Controls returns the configuration files that currently carry an effective
+// preventive hook: one that runs the SAGA command, can block before execution
+// and is not switched off by any of the agent's project files. They are the
+// files whose change during a run must count as tampering. A file that merely
+// references the command (post-action only, background, or disabled) protects
+// nothing and is therefore not a control; the doctor reports such files.
 func (s *Spec) Controls(root string) []string {
+	statuses := s.Inspect(root)
+	for _, st := range statuses {
+		if st.Disabled {
+			return nil
+		}
+	}
 	var files []string
-	for _, st := range s.Inspect(root) {
-		if st.Configured {
+	for _, st := range statuses {
+		if st.Configured && st.Preventive {
 			files = append(files, st.File)
 		}
 	}

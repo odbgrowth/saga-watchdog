@@ -169,7 +169,7 @@ The default profile includes:
 | --- | --- |
 | Protected branches | Refuse startup on `main` and `master`. |
 | Policy file | Treat changes during a run as critical tampering (`policy-tamper`, kill). |
-| Integration settings | When a deep integration is active, treat changes to the settings file that carries its hook as tampering (`hook-tamper`, kill) and pause for changes to the sibling settings file (`agent-config-modification`). |
+| Integration settings | When a deep integration is active, treat changes to the settings file that carries its blocking hook as tampering (`hook-tamper`, kill) and pause for changes to any sibling agent configuration file (`agent-config-modification`). |
 | Git security files | Protect `.git/config`, `.git/hooks/**` and linked-worktree `.git` pointers. |
 | CI workflows | Pause for changes under `.github/workflows/**`. |
 | Secret-like files | Pause for writes to `.env`, `.env.*`, `credentials*`, `secrets*`, `*.pem` and `*.key` at any depth. |
@@ -274,7 +274,10 @@ each hook contract, tool mapping and fail-closed scope. When a hook is
 configured, the file that carries it (`.claude/settings.json`,
 `.codex/hooks.json`, `.gemini/settings.json`) is protected for the run like
 the policy file (rule `hook-tamper`, kill), and a change to a sibling agent
-configuration file pauses the run (`agent-config-modification`).
+configuration file pauses the run (`agent-config-modification`). Only a hook
+that can block counts as active: a disabled, background or post-action-only
+entry protects nothing, is not treated as a control, and is reported by
+`saga-watchdog <agent> doctor`.
 
 ## What Watchdog can see
 
