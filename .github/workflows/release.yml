@@ -75,15 +75,16 @@ jobs:
           }
           # A rerun after a failed build or publish must not stop here: accept
           # a tag that already points at this commit, refuse any other commit.
-          existing="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" --jq .object.sha 2>/dev/null || true)"
-          if [[ -z "$existing" ]]; then
+          # gh api prints the error body on stdout, so branch on its exit status.
+          if existing="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" --jq .object.sha 2>/dev/null)"; then
+            if [[ "$existing" != "$GITHUB_SHA" ]]; then
+              echo "Tag $RELEASE_TAG already exists on $existing, not on $GITHUB_SHA."
+              exit 1
+            fi
+            echo "Tag $RELEASE_TAG already points at $GITHUB_SHA; reusing it."
+          else
             gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" \
               -f ref="refs/tags/$RELEASE_TAG" -f sha="$GITHUB_SHA"
-          elif [[ "$existing" != "$GITHUB_SHA" ]]; then
-            echo "Tag $RELEASE_TAG already exists on $existing, not on $GITHUB_SHA."
-            exit 1
-          else
-            echo "Tag $RELEASE_TAG already points at $GITHUB_SHA; reusing it."
           fi
       - name: Build release archives and checksums
         shell: bash
