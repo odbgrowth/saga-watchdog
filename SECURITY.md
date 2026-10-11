@@ -35,7 +35,7 @@ AI model                     reasons; produces tool-call proposals
         |
 AI-agent runtime             Claude Code, Codex, any CLI: executes tools,
         |                    owns its own permission system
-agent-specific integration   Claude Code hook -> saga-watchdog claude hook
+agent-specific integration   agent hook -> saga-watchdog claude|codex|gemini hook
         |                    (producer evidence: a claim, not an observation)
 SAGA Watchdog                policy engine, supervisor, observers, audit
         |
@@ -71,15 +71,16 @@ matching timestamps) are not independent confirmations of each other.
 
 ## What SAGA can prevent
 
-For supported Claude Code tool calls, SAGA blocks the action **before
-execution** only when all of the following hold:
+For supported Claude Code, Codex CLI and Gemini CLI tool calls, SAGA blocks
+the action **before execution** only when all of the following hold:
 
-- the relevant Claude Code hook fires for that tool;
-- the SAGA hook is configured in the project's settings and loaded;
+- the relevant agent hook fires for that tool;
+- the SAGA hook is configured in the project's settings, loaded and, where
+  the agent requires it, trusted;
 - the event can be safely interpreted (a usable path or host);
 - the SAGA supervisor for that run is reachable;
-- Claude Code honours its documented blocking contract (exit code 2,
-  `onFailure: "block"`).
+- the agent honours its documented blocking contract (exit code 2, and for
+  Claude Code `onFailure: "block"`).
 
 For generic `check` integrations the same holds for whatever wrapper calls
 `check` and honours the answer. No other action is prevented. There is no
@@ -87,10 +88,13 @@ guaranteed isolation, complete containment or unbypassable control.
 
 ## Fail-closed scope
 
-The deliberately configured Claude Code hook fails closed: a missing or
-unreachable watchdog, a timeout, a run ID mismatch, a malformed response or
-an uninterpretable event blocks the tool call. This scope is intentional and
-narrow. Generic supervision of an arbitrary CLI is not turned into universal
+The deliberately configured agent hook fails closed on the SAGA side: a
+missing or unreachable watchdog, a timeout, a run ID mismatch, a malformed
+response or an uninterpretable event blocks the tool call. Only Claude Code
+(2.1.295 or newer, `onFailure: "block"`) also blocks when the adapter itself
+cannot start or times out; Codex CLI and Gemini CLI log such a failure and
+let the call proceed, and both skip a project hook they do not trust. This
+scope is intentional and narrow. Generic supervision of an arbitrary CLI is not turned into universal
 fail-closed execution: an agent without a hook keeps running when the
 supervisor cannot see an action, and observe mode allows policy violations by
 design.
@@ -117,8 +121,8 @@ possible side effect, or remote jobs started elsewhere. A Bash tool call is
 recorded as a process execution; its command text is not interpreted and its
 file effects are observed only afterwards. Tools outside the hook matcher,
 including file reads, are invisible. User-level hooks in
-`~/.claude/settings.json` are outside the project and outside SAGA's
-protection.
+`~/.claude/settings.json`, `~/.codex` and `~/.gemini/settings.json` are
+outside the project and outside SAGA's protection.
 
 ## Filesystem boundary
 

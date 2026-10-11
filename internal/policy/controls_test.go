@@ -119,6 +119,11 @@ func TestIntegrationControlFilesAreKillLevel(t *testing.T) {
 		}
 	}
 	// The sibling settings file can disable the hook: pause for human review.
+	for _, sibling := range []string{".codex/config.toml", ".gemini/settings.json"} {
+		if d := New(cfg, root, ".codex/hooks.json").Evaluate(event.Event{Timestamp: epoch, Type: "file", Action: "write", Target: filepath.Join(root, filepath.FromSlash(sibling))}); d.Action != "pause" || d.RuleID != "agent-config-modification" {
+			t.Fatalf("%s: %+v", sibling, d)
+		}
+	}
 	if d := New(cfg, root, ".claude/settings.json").Evaluate(event.Event{Timestamp: epoch, Type: "file", Action: "write", Target: filepath.Join(root, ".claude", "settings.local.json")}); d.Action != "pause" || d.RuleID != "agent-config-modification" {
 		t.Fatalf("sibling settings change: %+v", d)
 	}

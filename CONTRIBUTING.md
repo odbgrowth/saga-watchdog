@@ -87,14 +87,17 @@ PR, check documentation links, run the relevant demos and target `main`.
 ## Project structure
 
 ```text
-cmd/saga-watchdog/              CLI, supervision loop, claude and docker commands
+cmd/saga-watchdog/              CLI, supervision loop, agent and docker commands
 internal/config/                strict YAML and built-in profile
 internal/event/                 event IDs, redaction and metadata allowlist
 internal/policy/                rules, path checks and escalation counters
 internal/gitinfo/               Git project and branch queries
 internal/supervisor/            owned process lifecycle
 internal/sources/               filesystem and local socket sources
-internal/integrations/claudecode/  Claude Code hook adapter and settings
+internal/integrations/agenthook/   shared hook runner and settings handling
+internal/integrations/claudecode/  Claude Code hook adapter
+internal/integrations/codex/       Codex CLI hook adapter
+internal/integrations/gemini/      Gemini CLI hook adapter
 internal/store/                 coding-agent run metadata and JSONL
 internal/dockerwatch/           Docker client, observation and bounded history
 docs/                           operating guides

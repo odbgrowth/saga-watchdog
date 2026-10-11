@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/odbgrowth/saga-watchdog/internal/integrations/agenthook"
 	"github.com/odbgrowth/saga-watchdog/internal/policy"
 	"github.com/odbgrowth/saga-watchdog/internal/sources/socket"
 )
@@ -226,7 +227,7 @@ func TestRunFailsClosed(t *testing.T) {
 			}
 		})
 	}
-	if code, _, errs := runHook(t, strings.Repeat(" ", maxInput+1), Options{Socket: "/s", RunID: "run_x", Send: (&fake{}).send}); code != 2 || !strings.Contains(errs, "exceeds") {
+	if code, _, errs := runHook(t, strings.Repeat(" ", agenthook.MaxInput+1), Options{Socket: "/s", RunID: "run_x", Send: (&fake{}).send}); code != 2 || !strings.Contains(errs, "exceeds") {
 		t.Fatalf("oversized input: %d %s", code, errs)
 	}
 }
