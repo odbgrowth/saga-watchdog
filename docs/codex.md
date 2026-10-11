@@ -97,7 +97,9 @@ does not: a hook that cannot start, times out or crashes is logged as failed
 and the call proceeds, and an untrusted project hook is skipped. Keep
 `saga-watchdog` on PATH, accept the hook once interactively, and treat
 `saga-watchdog codex doctor` as the pre-flight check. Headless `codex exec`
-runs hooks that were accepted earlier; it cannot accept new ones.
+runs hooks that were accepted earlier; it cannot accept new ones. After a
+run, `saga-watchdog report` warns when `.codex/hooks.json` carried the hook
+but no pre-action check ever arrived from Codex.
 
 ## 6. Protected configuration
 

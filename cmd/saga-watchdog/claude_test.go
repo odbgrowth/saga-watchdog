@@ -291,11 +291,50 @@ func TestHookConfigChangeIsCaughtAtExit(t *testing.T) {
 }
 
 func TestSiblingSettingsChangeIsCaughtAtExit(t *testing.T) {
-	root := claudeFixture(t, "enforce")
 	// The hook lives in settings.json; the sibling can disable it and is
 	// fingerprinted as well, so a missed notification still surfaces at exit.
-	cmd, out := cliCommand(t, root, "run", "--", "sh", "-c", "printf '{}' > .claude/settings.local.json")
-	if got := exitCode(cmd.Run()); got != 125 {
+	// When the observer catches the write live (certain with the sleep, a
+	// race without it), the run pauses and holds the shell; an operator
+	// resume lets it exit, and the exit fingerprint still records the
+	// violation.
+	for name, script := range map[string]string{"at exit": "printf '{}' > .claude/settings.local.json", "live": "printf '{}' > .claude/settings.local.json; sleep 1"} {
+		t.Run(name, func(t *testing.T) { siblingSettingsChange(t, script) })
+	}
+}
+
+func siblingSettingsChange(t *testing.T, script string) {
+	root := claudeFixture(t, "enforce")
+	cmd, out := cliCommand(t, root, "run", "--", "sh", "-c", script)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	var got int
+wait:
+	for {
+		select {
+		case err := <-done:
+			got = exitCode(err)
+			break wait
+		case <-time.After(10 * time.Second):
+			t.Fatalf("run did not end: %s", out)
+		case <-ticker.C:
+			_, found, err := store.Locate(root, "")
+			if err != nil || found.Control == "" {
+				continue
+			}
+			if live, err := socket.Send(found.Control, socket.Request{Operation: "status", RunID: found.ID}); err == nil && live.Run != nil && live.Run.Status == "paused" {
+				if live.Run.Rule != "agent-config-modification" {
+					t.Fatalf("paused for %s: %s", live.Run.Rule, out)
+				}
+				socket.Send(found.Control, socket.Request{Operation: "resume", RunID: found.ID})
+			}
+		}
+	}
+	if got != 125 {
 		t.Fatalf("exit %d: %s", got, out)
 	}
 	_, r, err := store.Locate(root, "")
