@@ -116,7 +116,9 @@ Before tagging a release, maintainers should:
    limitations.
 3. Update the README's release status and installation instructions, and the
    supported-version policy in `SECURITY.md`.
-4. Create a reviewed `vX.Y.Z` tag on the tested commit.
+4. Create a reviewed `vX.Y.Z` tag on the tested commit, or run the Release
+   workflow manually (Actions, Release, "Run workflow") with that version:
+   it creates the tag on the chosen ref before building.
 
 Pushing such a tag triggers the [release workflow](https://github.com/odbgrowth/saga-watchdog/blob/main/.github/workflows/release.yml).
 It runs the checks, then builds Linux and macOS archives for amd64 and arm64,
