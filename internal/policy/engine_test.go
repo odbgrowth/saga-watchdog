@@ -229,8 +229,12 @@ func TestAllowListModesAndGrants(t *testing.T) {
 		})
 	}
 	e := New(cfg, t.TempDir())
-	if !e.Grant("network", "https://BIT.ly/x") || !e.Grant("tool", "payments/charge") || e.Grant("file", "x") || e.Grant("network", "") {
+	grant := func(typeID, target string) bool { _, ok := e.Grant(typeID, target); return ok }
+	if !grant("network", "https://BIT.ly/x") || !grant("tool", "payments/charge") || grant("file", "x") || grant("network", "") {
 		t.Fatal("grant acceptance")
+	}
+	if added, ok := e.Grant("network", "bit.ly"); added || !ok {
+		t.Fatalf("duplicate grant must be a successful no-op: %t %t", added, ok)
 	}
 	if d := e.Evaluate(network("bit.ly")); d.Action != "allow" {
 		t.Fatalf("granted host still blocked: %+v", d)
@@ -250,6 +254,12 @@ func TestAllowListModesAndGrants(t *testing.T) {
 	}
 	if len(e.grants) > maxGrants {
 		t.Fatalf("grants unbounded: %d", len(e.grants))
+	}
+	if _, ok := e.Grant("tool", "srv/late"); ok {
+		t.Fatal("grant accepted beyond the bound")
+	}
+	if _, ok := e.Grant("tool", "srv/tool1"); !ok {
+		t.Fatal("existing grant refused at the bound")
 	}
 	// A retry of the same host in URL form is a repeat, not an alternative target.
 	e = New(cfg, t.TempDir())

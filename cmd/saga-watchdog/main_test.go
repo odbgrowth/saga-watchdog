@@ -160,7 +160,7 @@ ready:
 	send := func(op string, input socket.Input) socket.Response {
 		t.Helper()
 		path := r.Socket
-		if op == "pause" || op == "resume" || op == "kill" || op == "status" {
+		if op == "pause" || op == "resume" || op == "kill" || op == "status" || op == "grant" {
 			path = r.Control
 		}
 		response, err := socket.Send(path, socket.Request{Operation: op, RunID: r.ID, Event: input})

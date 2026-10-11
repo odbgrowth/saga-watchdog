@@ -380,11 +380,15 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 					stop(err.Error(), "audit-failed")
 					continue
 				}
-				if !engine.Grant(request.Event.Type, target) {
+				added, ok := engine.Grant(request.Event.Type, target)
+				if !ok {
 					call.Reply <- socket.Response{Error: "grant refused: unsupported target or grant limit reached"}
 					continue
 				}
-				r.Grants = append(r.Grants, request.Event.Type+" "+target)
+				if added {
+					// Only distinct grants are persisted; the engine bounds them.
+					r.Grants = append(r.Grants, request.Event.Type+" "+target)
+				}
 				snapshot := r
 				call.Reply <- socket.Response{Allowed: true, Run: &snapshot}
 			case "pause", "resume", "kill":

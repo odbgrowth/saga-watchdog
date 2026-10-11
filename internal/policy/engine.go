@@ -38,8 +38,10 @@ type Engine struct {
 	grants    map[string]struct{}
 }
 
-// maxGrants bounds operator grants for one run.
-const maxGrants = 256
+// maxGrants bounds operator grants for one run. With targets bounded by the
+// control socket, the persisted list stays far below the run record's reader
+// limit.
+const maxGrants = 64
 
 // New builds an engine for one run. controls are project-relative files that
 // configure an active preventive integration (for example the Claude Code hook
@@ -56,21 +58,29 @@ func New(cfg config.Config, root string, controls ...string) *Engine {
 }
 
 // Grant authorizes one network host or tool identifier for the rest of the
-// run in allowlist mode. It never overrides a deny entry. It reports false
-// for an unsupported type or when the bound is reached.
-func (e *Engine) Grant(typeID, target string) bool {
+// run in allowlist mode. It never overrides a deny entry. ok is false for an
+// unsupported type or when the bound is reached; added is false for a grant
+// that already existed, which is a successful no-op.
+func (e *Engine) Grant(typeID, target string) (added, ok bool) {
 	switch typeID {
 	case "network":
 		target = networkHost(target)
 	case "tool":
 	default:
-		return false
+		return false, false
 	}
-	if target == "" || len(e.grants) >= maxGrants {
-		return false
+	if target == "" {
+		return false, false
 	}
-	e.grants[typeID+"\x00"+target] = struct{}{}
-	return true
+	key := typeID + "\x00" + target
+	if _, exists := e.grants[key]; exists {
+		return false, true
+	}
+	if len(e.grants) >= maxGrants {
+		return false, false
+	}
+	e.grants[key] = struct{}{}
+	return true, true
 }
 
 func (e *Engine) granted(typeID, target string) bool {

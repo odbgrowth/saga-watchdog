@@ -86,8 +86,9 @@ func Validate(r Request, controls bool) error {
 			if r.Event.Type != "network" && r.Event.Type != "tool" {
 				return errors.New("grant applies to network or tool targets")
 			}
-			if r.Event.Target == "" || len(r.Event.Target) > 4096 || strings.ContainsAny(r.Event.Target, "\x00\r\n") {
-				return errors.New("grant requires a target without control characters")
+			// A hostname is at most 253 bytes; tool identifiers are short too.
+			if r.Event.Target == "" || len(r.Event.Target) > 253 || strings.ContainsAny(r.Event.Target, "\x00\r\n") {
+				return errors.New("grant requires a target of at most 253 bytes without control characters")
 			}
 			if r.Event.Action != "" || r.Event.Result != "" || len(r.Event.Lineage()) != 0 {
 				return errors.New("grant carries only a type and a target")

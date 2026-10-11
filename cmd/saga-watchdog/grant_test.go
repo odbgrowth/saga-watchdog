@@ -33,6 +33,14 @@ func TestGrantAuthorizesUnlistedTargetsForOneRun(t *testing.T) {
 	if code := exitCode(cmd.Run()); code != 0 {
 		t.Fatalf("tool grant %d: %s", code, text)
 	}
+	// A repeated grant succeeds without growing the persisted list; an
+	// oversized target is refused by the control socket.
+	if d := send("grant", socket.Input{Type: "network", Target: "NEW.example."}); d.Run == nil || len(d.Run.Grants) != 2 {
+		t.Fatalf("duplicate grant: %+v", d)
+	}
+	if _, err := socket.Send(r.Control, socket.Request{Operation: "grant", RunID: r.ID, Event: socket.Input{Type: "tool", Target: strings.Repeat("x", 254)}}); err == nil {
+		t.Fatal("oversized grant target accepted")
+	}
 	for _, bad := range [][]string{{"grant", "file", "x"}, {"grant", "network"}, {"grant", "network", "a", "b"}} {
 		if cmd, _ := cliCommand(t, root, bad...); exitCode(cmd.Run()) == 0 {
 			t.Fatalf("accepted %v", bad)
@@ -73,7 +81,8 @@ func TestGrantAuthorizesUnlistedTargetsForOneRun(t *testing.T) {
 			granted++
 		}
 	}
-	if granted != 2 {
+	// Every operator request is audited, the duplicate included.
+	if granted != 3 {
 		t.Fatalf("grants not audited: %d", granted)
 	}
 	cmd, text = cliCommand(t, root, "report")
