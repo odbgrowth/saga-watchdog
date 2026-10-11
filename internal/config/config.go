@@ -56,6 +56,10 @@ type Escalation struct {
 	WarnAfter  int           `yaml:"warn_after"`
 	PauseAfter int           `yaml:"pause_after"`
 	KillAfter  int           `yaml:"kill_after"`
+	// ShellFollowUp counts a shell command that follows a denial as an
+	// alternative route, once per denial. A denied fetch or tool call followed
+	// by curl in a shell is the pattern this catches.
+	ShellFollowUp bool `yaml:"shell_follow_up"`
 }
 
 // Network governs cooperative network checks by hostname. In denylist mode
@@ -67,6 +71,11 @@ type Network struct {
 	Mode  string   `yaml:"mode"`
 	Allow []string `yaml:"allow"`
 	Deny  []string `yaml:"deny"`
+	// DenyRedirectors pauses connections to well-known URL shorteners and
+	// redirectors unless the host is explicitly allowed or granted. Agents have
+	// used them to get around fetch restrictions; the list is a tripwire, not
+	// a complete catalogue.
+	DenyRedirectors bool `yaml:"deny_redirectors"`
 }
 
 // Tools governs cooperative tool calls by their canonical identifier, such as
@@ -89,8 +98,8 @@ func Default() Config {
 			Ignore:          []string{"**/node_modules/**", "**/vendor/**", ".git/objects/**", "**/dist/**", "**/build/**"},
 			DeleteThreshold: 100, DeleteWindow: 10 * time.Second,
 		},
-		Escalation: Escalation{Window: 120 * time.Second, WarnAfter: 2, PauseAfter: 3, KillAfter: 5},
-		Network:    Network{Mode: "denylist"},
+		Escalation: Escalation{Window: 120 * time.Second, WarnAfter: 2, PauseAfter: 3, KillAfter: 5, ShellFollowUp: true},
+		Network:    Network{Mode: "denylist", DenyRedirectors: true},
 		Tools:      Tools{Mode: "denylist"},
 	}
 }

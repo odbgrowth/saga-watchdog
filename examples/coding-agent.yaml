@@ -31,6 +31,8 @@ escalation:
   warn_after: 2
   pause_after: 3
   kill_after: 5
+  # A shell command right after a denial counts as an alternative route.
+  shell_follow_up: true
 
 network:
   # denylist (default): every host is allowed unless denied.
@@ -41,6 +43,8 @@ network:
   mode: denylist
   allow: []
   deny: [blocked.example.com]
+  # Pause on well-known URL shorteners unless allowed or granted explicitly.
+  deny_redirectors: true
 
 tools:
   # Same modes for cooperative tool calls by canonical identifier:
