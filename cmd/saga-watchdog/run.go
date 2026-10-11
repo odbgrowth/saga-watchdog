@@ -14,7 +14,8 @@ import (
 	"github.com/odbgrowth/saga-watchdog/internal/config"
 	"github.com/odbgrowth/saga-watchdog/internal/event"
 	"github.com/odbgrowth/saga-watchdog/internal/gitinfo"
-	"github.com/odbgrowth/saga-watchdog/internal/integrations/claudecode"
+	"github.com/odbgrowth/saga-watchdog/internal/integrations"
+	"github.com/odbgrowth/saga-watchdog/internal/integrations/agenthook"
 	"github.com/odbgrowth/saga-watchdog/internal/policy"
 	"github.com/odbgrowth/saga-watchdog/internal/sources/filesystem"
 	"github.com/odbgrowth/saga-watchdog/internal/sources/socket"
@@ -85,13 +86,13 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 	// Settings files that run the SAGA hook configure a preventive integration
 	// for this run. They are fingerprinted now, after the observer is live, and
 	// protected like the policy file until the run ends.
-	r.Controls = claudecode.Controls(g.Root)
+	r.Controls = integrations.Controls(g.Root)
 	controlsDigest := map[string]string{}
 	if len(r.Controls) > 0 {
-		// Once a hook is active both project settings files matter: the
-		// sibling can disable it. Fingerprint both, not only the carrier.
-		for _, name := range claudecode.Files {
-			controlsDigest[name] = claudecode.Digest(g.Root, []string{name})
+		// Once a hook is active every agent configuration file matters: a
+		// sibling can disable it. Fingerprint all of them, not only the carrier.
+		for _, name := range integrations.Files() {
+			controlsDigest[name] = agenthook.Digest(g.Root, []string{name})
 		}
 	}
 	env := make([]string, 0, len(os.Environ())+2)
@@ -287,9 +288,9 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 					handle(event.Event{Source: "supervisor", Type: "policy", Action: "tamper", Target: config.Filename, Result: "success"})
 				}
 			}
-			for _, name := range claudecode.Files {
+			for _, name := range integrations.Files() {
 				// The watcher can miss a notification; the fingerprint cannot.
-				if digest, ok := controlsDigest[name]; ok && !stopping && claudecode.Digest(g.Root, []string{name}) != digest {
+				if digest, ok := controlsDigest[name]; ok && !stopping && agenthook.Digest(g.Root, []string{name}) != digest {
 					handle(event.Event{Source: "supervisor", Type: "file", Action: "write", Target: name, Result: "success"})
 				}
 			}

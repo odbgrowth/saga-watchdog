@@ -18,7 +18,7 @@ import (
 	"github.com/odbgrowth/saga-watchdog/internal/config"
 	"github.com/odbgrowth/saga-watchdog/internal/event"
 	"github.com/odbgrowth/saga-watchdog/internal/gitinfo"
-	"github.com/odbgrowth/saga-watchdog/internal/integrations/claudecode"
+	"github.com/odbgrowth/saga-watchdog/internal/integrations"
 	"github.com/odbgrowth/saga-watchdog/internal/policy"
 	"github.com/odbgrowth/saga-watchdog/internal/sources/filesystem"
 	"github.com/odbgrowth/saga-watchdog/internal/sources/socket"
@@ -39,12 +39,15 @@ Usage:
   saga-watchdog check --type TYPE --action ACTION --target TARGET [--run ID]
   saga-watchdog emit --type TYPE --action ACTION --target TARGET --result RESULT [--run ID]
   saga-watchdog claude config | setup [--local] | remove [--local] | doctor
-  saga-watchdog claude hook            (run by Claude Code hooks; reads stdin)
+  saga-watchdog codex  config | setup | remove | doctor
+  saga-watchdog gemini config | setup | remove | doctor
+  saga-watchdog claude|codex|gemini hook   (run by the agent's hooks; reads stdin)
   saga-watchdog docker validate|watch|status|events --config FILE
   saga-watchdog docker watch --config FILE --once
 
 Linux and macOS process supervision. No file-read or raw network monitoring.
-Claude Code can ask SAGA before supported tool calls; see docs/claude-code.md.
+Claude Code, Codex CLI and Gemini CLI can ask SAGA before supported tool
+calls; see docs/claude-code.md, docs/codex.md and docs/gemini-cli.md.
 Docker observation uses a separate config and needs no Git repository.
 `
 
@@ -67,8 +70,10 @@ func cli(args []string) int {
 	if args[0] == "docker" {
 		return dockerCLI(args[1:])
 	}
-	if args[0] == "claude" {
-		return claudeCLI(args[1:])
+	for _, spec := range integrations.Specs {
+		if args[0] == spec.Agent {
+			return agentCLI(spec, args[1:])
+		}
 	}
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -211,10 +216,15 @@ func doctor(g gitinfo.Info, c config.Config) int {
 		source.Close()
 	}
 	cancel()
-	if controls := claudecode.Controls(g.Root); len(controls) > 0 {
-		fmt.Println("OK Claude Code preventive hook configured in", strings.Join(controls, ", "), "(verify: saga-watchdog claude doctor)")
-	} else {
-		fmt.Println("! No Claude Code preventive hook; supervision and observation only (optional: saga-watchdog claude setup)")
+	hooked := false
+	for _, spec := range integrations.Specs {
+		if controls := spec.Controls(g.Root); len(controls) > 0 {
+			hooked = true
+			fmt.Printf("OK %s preventive hook configured in %s (verify: saga-watchdog %s doctor)\n", spec.Name, strings.Join(controls, ", "), spec.Agent)
+		}
+	}
+	if !hooked {
+		fmt.Println("! No preventive agent hook; supervision and observation only (optional: saga-watchdog claude|codex|gemini setup)")
 	}
 	fmt.Println("! File READ monitoring and raw network enforcement are unavailable")
 	fmt.Println("! Integrations report events; they do not prove OS actions occurred")

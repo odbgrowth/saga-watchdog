@@ -179,9 +179,10 @@ func matchSegments(pattern, target []string) bool {
 	return match(0, 0)
 }
 
-// agentSettings are the Claude Code settings files that can carry or disable
-// the SAGA preventive hook.
-var agentSettings = []string{".claude/settings.json", ".claude/settings.local.json"}
+// agentSettings are the project files of supported agents that can carry or
+// disable the SAGA preventive hook: Claude Code settings, Codex hooks.json and
+// config.toml, Gemini CLI settings.
+var agentSettings = []string{".claude/settings.json", ".claude/settings.local.json", ".codex/hooks.json", ".codex/config.toml", ".gemini/settings.json"}
 
 // Controls cannot be hidden by a broad ignore such as .git/** or **.
 var controlPatterns = append([]string{".saga-watchdog.yaml", ".git/config", ".git/hooks/**", ".github/workflows/**"}, agentSettings...)

@@ -44,7 +44,7 @@ The agent reasons. SAGA does not. It watches boundaries.
 
 ## Feature matrix
 
-| Capability | Claude Code integration | Coding-agent supervisor | Docker observer |
+| Capability | Agent hooks (Claude Code, Codex CLI, Gemini CLI) | Coding-agent supervisor | Docker observer |
 | --- | ---: | ---: | ---: |
 | Pre-action checks | Yes, matched tools | Cooperative `check` integrations | No |
 | Filesystem observation | Post-action, via the supervisor | Yes, post-action | No |
@@ -101,19 +101,22 @@ and stops a run after two hours. The policy stays fixed for the run. The
 the generic `check`/`emit` integration; the [shell demo](examples/DEMO.md)
 shows it working without any AI account.
 
-## Preventive Claude Code checks
+## Preventive agent checks
 
-Claude Code exposes hook events before each tool call. Install the SAGA hook
-once per project and start Claude under supervision:
+Claude Code, Codex CLI and Gemini CLI expose hook events before each tool
+call. Install the SAGA hook once per project and start the agent under
+supervision:
 
 ```sh
 saga-watchdog claude setup      # merges hooks into .claude/settings.json
 saga-watchdog claude doctor
 saga-watchdog run -- claude
+# Codex CLI:  saga-watchdog codex setup  && saga-watchdog run -- codex
+# Gemini CLI: saga-watchdog gemini setup && saga-watchdog run -- gemini
 ```
 
-From then on, Write, Edit, MultiEdit, NotebookEdit, Bash, WebFetch and MCP
-tool calls are checked by the same policy engine before they execute:
+From then on, file edits, shell commands, web fetches and MCP tool calls are
+checked by the same policy engine before they execute (Claude Code shown):
 
 ```text
 Write src/app.go           -> allowed
@@ -131,7 +134,9 @@ never collected. Subagents receive no exemption.
 Read the [Claude Code guide](docs/claude-code.md) for the verified hook
 contract, tool mapping, observe mode, fail-closed behaviour and
 troubleshooting, and the [Claude demo](examples/claude-code.md) for a
-reproducible walkthrough.
+reproducible walkthrough. The [Codex guide](docs/codex.md) and the
+[Gemini CLI guide](docs/gemini-cli.md) cover what differs for those agents,
+including the cases where the agent itself cannot fail closed.
 
 ## Observe an existing Docker agent
 
@@ -173,6 +178,8 @@ Project        init | validate | doctor
 Run            run -- <command> | status | events | pause | resume | kill
 Integrations   check | emit
 Claude Code    claude config | setup [--local] | remove [--local] | doctor | hook
+Codex CLI      codex  config | setup | remove | doctor | hook
+Gemini CLI     gemini config | setup | remove | doctor | hook
 Docker         docker validate | watch | status | events
 ```
 
@@ -182,6 +189,7 @@ Run `saga-watchdog --help` for arguments.
 
 - [Coding-agent guide: supervision, observation, policy, check/emit](docs/coding-agent.md)
 - [Claude Code guide: preventive hooks](docs/claude-code.md)
+- [Codex CLI guide](docs/codex.md) and [Gemini CLI guide](docs/gemini-cli.md)
 - [Docker observer guide](docs/docker-observer.md)
 - [Shell demo](examples/DEMO.md) and [Claude Code demo](examples/claude-code.md)
 - [Contributing, tests and release process](CONTRIBUTING.md)

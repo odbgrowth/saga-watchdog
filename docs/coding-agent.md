@@ -8,8 +8,9 @@ in the Git project root, even when SAGA is invoked from a subdirectory. Relative
 file targets in `check` and `emit` are also relative to that root.
 
 This guide is generic: everything here applies to any CLI agent. Agents that
-expose structured pre-action events can add a deep integration on top; the
-only one implemented is [Claude Code](claude-code.md).
+expose structured pre-action events add a deep integration on top:
+[Claude Code](claude-code.md), [Codex CLI](codex.md) and
+[Gemini CLI](gemini-cli.md).
 
 ## How it works
 
@@ -49,9 +50,10 @@ instrumented; SAGA sees effects, not tool calls.
 Some agents expose structured events before a tool call executes. A thin
 adapter maps those events onto the same canonical event types and the same
 socket, so the policy engine can refuse a supported action before it happens.
-The adapter contains no rules of its own. Claude Code is the first such
-integration; see the [Claude Code guide](claude-code.md). It is optional and
-does not change how generic supervision works.
+The adapter contains no rules of its own. Claude Code, Codex CLI and Gemini
+CLI have such adapters; see the [Claude Code guide](claude-code.md), the
+[Codex guide](codex.md) and the [Gemini CLI guide](gemini-cli.md). They are
+optional and do not change how generic supervision works.
 
 ## Example: a protected write
 
@@ -167,7 +169,7 @@ The default profile includes:
 | --- | --- |
 | Protected branches | Refuse startup on `main` and `master`. |
 | Policy file | Treat changes during a run as critical tampering (`policy-tamper`, kill). |
-| Integration settings | When a deep integration is active, treat changes to the settings file that carries its hook as tampering (`hook-tamper`, kill) and pause for changes to the sibling settings file (`agent-config-modification`). |
+| Integration settings | When a deep integration is active, treat changes to the settings file that carries its blocking hook as tampering (`hook-tamper`, kill) and pause for changes to any sibling agent configuration file (`agent-config-modification`). |
 | Git security files | Protect `.git/config`, `.git/hooks/**` and linked-worktree `.git` pointers. |
 | CI workflows | Pause for changes under `.github/workflows/**`. |
 | Secret-like files | Pause for writes to `.env`, `.env.*`, `credentials*`, `secrets*`, `*.pem` and `*.key` at any depth. |
@@ -254,21 +256,28 @@ controls enabled as appropriate. Starting an existing CLI under Watchdog enables
 filesystem observation and process supervision; it does not automatically
 instrument that CLI's internal tools or network requests.
 
-## Running Claude Code
+## Running Claude Code, Codex CLI or Gemini CLI
 
 ```sh
 saga-watchdog run -- claude
+saga-watchdog run -- codex
+saga-watchdog run -- gemini
 ```
 
-Without further setup the same generic boundary applies: Claude's own
+Without further setup the same generic boundary applies: the agent's own
 permissions remain separate and SAGA sees effects, not tool calls. Install
-the optional hook with `saga-watchdog claude setup` to have Write, Edit,
-MultiEdit, NotebookEdit, Bash, WebFetch and MCP tool calls checked by this
-policy before they execute. The [Claude Code guide](claude-code.md) documents
-the hook contract, the tool mapping and the fail-closed behaviour. When the
-hook is configured, the settings files that carry it (`.claude/settings.json`,
-`.claude/settings.local.json`) are protected for the run like the policy file
-(rule `hook-tamper`, kill).
+the optional hook with `saga-watchdog claude|codex|gemini setup` to have file
+edits, shell commands, web fetches and MCP tool calls checked by this policy
+before they execute. The [Claude Code guide](claude-code.md), the
+[Codex guide](codex.md) and the [Gemini CLI guide](gemini-cli.md) document
+each hook contract, tool mapping and fail-closed scope. When a hook is
+configured, the file that carries it (`.claude/settings.json`,
+`.codex/hooks.json`, `.gemini/settings.json`) is protected for the run like
+the policy file (rule `hook-tamper`, kill), and a change to a sibling agent
+configuration file pauses the run (`agent-config-modification`). Only a hook
+that can block counts as active: a disabled, background or post-action-only
+entry protects nothing, is not treated as a control, and is reported by
+`saga-watchdog <agent> doctor`.
 
 ## What Watchdog can see
 
@@ -278,7 +287,7 @@ hook is configured, the settings files that carry it (`.claude/settings.json`,
 | Filesystem observer | Covered create/write/rename/delete notifications | After the change; no reliable attribution to a process. |
 | Git awareness | Startup repository/branch/dirty state/remote names, plus periodic branch checks | Does not turn Git into a transaction guard. |
 | Integration socket | Structured actions reported by a wrapper or tool | Producer reports are not independent OS evidence. |
-| Deep integration (Claude Code hook) | Supported tool calls before execution, with tool and agent identifiers | Only tools that pass through the hook; still a producer report. |
+| Deep integration (agent hook) | Supported tool calls before execution, with tool and agent identifiers | Only tools that pass through the hook; still a producer report. |
 
 A change from your editor can trigger the same rule as an agent change.
 Filesystem notifications can be coalesced or lost, and ignored directories have

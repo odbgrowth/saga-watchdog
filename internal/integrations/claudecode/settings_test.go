@@ -142,8 +142,22 @@ func TestInspectDetectsDisabledHooksAndPartialSetup(t *testing.T) {
 	if !status[1].Configured || status[1].Preventive || !status[1].Disabled {
 		t.Fatalf("local disableAllHooks not detected: %+v", status[1])
 	}
-	if got := Controls(dir); len(got) != 2 {
-		t.Fatalf("both files reference SAGA: %v", got)
+	// Neither file carries an effective preventive hook, so neither is a control.
+	if got := Controls(dir); len(got) != 0 {
+		t.Fatalf("non-preventive or disabled files counted as controls: %v", got)
+	}
+	preventive := string(SettingsJSON())
+	if err := os.WriteFile(filepath.Join(dir, ".claude", "settings.json"), []byte(preventive), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got := Controls(dir); len(got) != 0 {
+		t.Fatalf("disableAllHooks in the sibling must switch the control off: %v", got)
+	}
+	if err := os.Remove(filepath.Join(dir, ".claude", "settings.local.json")); err != nil {
+		t.Fatal(err)
+	}
+	if got := Controls(dir); len(got) != 1 || got[0] != ".claude/settings.json" {
+		t.Fatalf("preventive project hook not a control: %v", got)
 	}
 	if s := Inspect(t.TempDir()); s[0].Configured || s[0].Err != nil || len(Controls(t.TempDir())) != 0 {
 		t.Fatalf("missing files: %+v", s)
