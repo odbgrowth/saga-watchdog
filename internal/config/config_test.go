@@ -92,3 +92,25 @@ func TestToolsDenyAndUnattended(t *testing.T) {
 		}
 	}
 }
+
+func TestAllowListModes(t *testing.T) {
+	c, err := Parse(strings.NewReader("version: 1\nprofile: coding-agent\nmode: enforce\nnetwork:\n  mode: allowlist\n  allow: [api.github.com, .pypi.org]\n  deny: [evil.example]\ntools:\n  mode: allowlist\n  allow: ['github/*', filesystem/read_file]\n"))
+	if err != nil || c.Network.Mode != "allowlist" || len(c.Network.Allow) != 2 || c.Tools.Mode != "allowlist" || len(c.Tools.Allow) != 2 {
+		t.Fatalf("allow lists not parsed: %+v %v", c, err)
+	}
+	if d := Default(); d.Network.Mode != "denylist" || d.Tools.Mode != "denylist" || len(d.Network.Allow) != 0 {
+		t.Fatalf("defaults must be denylist mode: %+v", d)
+	}
+	for _, bad := range []string{
+		"network:\n  mode: open\n",
+		"tools:\n  mode: allow\n",
+		"network:\n  allow: ['*.example.com']\n",
+		"network:\n  allow: ['https://example.com']\n",
+		"network:\n  deny: ['.example.com']\n",
+		"tools:\n  allow: ['/abs']\n",
+	} {
+		if _, err := Parse(strings.NewReader("version: 1\nprofile: coding-agent\nmode: enforce\n" + bad)); err == nil {
+			t.Errorf("accepted %q", bad)
+		}
+	}
+}

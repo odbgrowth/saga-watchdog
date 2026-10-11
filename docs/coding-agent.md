@@ -86,6 +86,8 @@ escalation scenarios.
 | `pause <run-id>` | Suspend an owned run's process group. |
 | `resume <run-id>` | Explicitly resume a paused run and record the request. |
 | `kill <run-id>` | Stop an owned run with graceful/forced termination. |
+| `grant [--run ID] network <host>` or `tool <server/tool>` | Authorize one unlisted host or tool for the rest of a run (allowlist modes). |
+| `report [--run ID] [--json]` | Summarize a run from its audit log. |
 | `check` | Ask the running supervisor for a pre-action decision. |
 | `emit` | Submit a post-action observation to the running supervisor. |
 | `version` | Print the binary version. |
@@ -146,22 +148,35 @@ escalation:
   pause_after: 3
   kill_after: 5
 network:
+  mode: denylist
+  allow: []
   deny: [blocked.example.com]
 tools:
+  mode: denylist
+  allow: []
   deny: [github/delete_repository, 'payments/*']
 ```
 
-`network.deny` is an optional exact-hostname deny list, empty by default. Hostnames
-are normalized from host or URL targets. It governs integration checks only;
-there is no OS network enforcement and no default allow list. Other hosts are
-allowed unless another rule, such as escalation, intervenes.
+`network.deny` is an optional exact-hostname deny list, empty by default.
+Hostnames are normalized from host or URL targets. It governs integration
+checks only; there is no OS network enforcement. In the default `denylist`
+mode other hosts are allowed unless another rule, such as escalation,
+intervenes.
+
+`network.mode: allowlist` turns that around: a host must appear in
+`network.allow`, or be granted for the run by an operator, or the check is
+denied and the run pauses (`network-unlisted`). An allow entry starting with a
+dot, such as `.pypi.org`, covers that domain and its subdomains; other entries
+are exact. `network.deny` always wins, even over a grant. See
+[Authorizing external actions](#authorizing-external-actions).
 
 `tools.deny` is an optional deny list for cooperative `tool` events by their
 canonical identifier: MCP tools as `server/tool`, other tools by name. Entries
 are path-style globs, so `payments/*` denies every tool of one MCP server and
 `*/drop_*` denies a tool name on any server. A match pauses the run
-(`tool-denied`) and denies the check. Like `network.deny` it governs reported
-events only; nothing is intercepted at the OS level.
+(`tool-denied`) and denies the check. `tools.mode: allowlist` with
+`tools.allow` works like the network allow list (`tool-unlisted`). Both govern
+reported events only; nothing is intercepted at the OS level.
 
 The default profile includes:
 
@@ -195,6 +210,44 @@ evaluate matching protected paths inside an ignored tree.
 Relative paths are resolved against the project, normalized, and checked for
 containment. Protection rules check both the named path and its resolved target. This is policy matching, not a race-free OS file authorization
 mechanism. Symlink targets outside the watched tree are not recursively watched.
+
+## Authorizing external actions
+
+An agent that cannot finish a task tends to try another route: a different
+service, a URL shortener, a shell command instead of a denied tool. Allowlist
+modes make that expansion of authority a human decision instead of a default.
+
+```yaml
+network:
+  mode: allowlist
+  allow: [api.github.com, .pypi.org, registry.npmjs.org]
+tools:
+  mode: allowlist
+  allow: ['github/*', 'filesystem/read_*']
+```
+
+Every host or tool outside the lists pauses the run with `network-unlisted`
+or `tool-unlisted`; the denial message names the exact grant command. The
+operator decides in another terminal:
+
+```sh
+saga-watchdog status
+saga-watchdog grant network api.openai.com
+saga-watchdog resume run_...
+```
+
+A grant lasts for that run only, is recorded as an operator control event in
+the audit log and in `status`, and never overrides a `deny` entry. Repeated
+unlisted targets still count towards escalation, so an agent that keeps
+hunting for a route is stopped before the fifth attempt in the window. Start
+a new project in observe mode to learn which hosts a task needs, then switch
+to enforce.
+
+The limit is the same as for every pre-action check: only calls that pass
+through a hook or a cooperative `check` are authorized this way. A shell
+command that opens a connection is recorded as a process execution; the
+filesystem observer sees its effects afterwards, the network observer does not
+exist. Treat allowlist mode as policy for cooperating tools, not as a firewall.
 
 ## Observe and enforce
 

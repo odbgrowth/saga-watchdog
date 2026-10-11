@@ -35,7 +35,13 @@ type Engine struct {
 	last      time.Time
 	denials   []observation
 	deletions []observation
+	grants    map[string]struct{}
 }
+
+// maxGrants bounds operator grants for one run. With targets bounded by the
+// control socket, the persisted list stays far below the run record's reader
+// limit.
+const maxGrants = 64
 
 // New builds an engine for one run. controls are project-relative files that
 // configure an active preventive integration (for example the Claude Code hook
@@ -45,8 +51,59 @@ func New(cfg config.Config, root string, controls ...string) *Engine {
 	cfg.Filesystem.Protect = append([]string(nil), cfg.Filesystem.Protect...)
 	cfg.Filesystem.Ignore = append([]string(nil), cfg.Filesystem.Ignore...)
 	cfg.Network.Deny = append([]string(nil), cfg.Network.Deny...)
+	cfg.Network.Allow = append([]string(nil), cfg.Network.Allow...)
 	cfg.Tools.Deny = append([]string(nil), cfg.Tools.Deny...)
-	return &Engine{cfg: cfg, root: root, controls: append([]string(nil), controls...)}
+	cfg.Tools.Allow = append([]string(nil), cfg.Tools.Allow...)
+	return &Engine{cfg: cfg, root: root, controls: append([]string(nil), controls...), grants: map[string]struct{}{}}
+}
+
+// Grant authorizes one network host or tool identifier for the rest of the
+// run in allowlist mode. It never overrides a deny entry. ok is false for an
+// unsupported type or when the bound is reached; added is false for a grant
+// that already existed, which is a successful no-op.
+func (e *Engine) Grant(typeID, target string) (added, ok bool) {
+	switch typeID {
+	case "network":
+		target = networkHost(target)
+	case "tool":
+	default:
+		return false, false
+	}
+	if target == "" {
+		return false, false
+	}
+	key := typeID + "\x00" + target
+	if _, exists := e.grants[key]; exists {
+		return false, true
+	}
+	if len(e.grants) >= maxGrants {
+		return false, false
+	}
+	e.grants[key] = struct{}{}
+	return true, true
+}
+
+func (e *Engine) granted(typeID, target string) bool {
+	_, ok := e.grants[typeID+"\x00"+target]
+	return ok
+}
+
+// hostListed reports whether host matches an entry: exactly, or, for an entry
+// with a leading dot, as that domain or one of its subdomains.
+func hostListed(entries []string, host string) bool {
+	for _, entry := range entries {
+		entry = strings.ToLower(strings.TrimSuffix(entry, "."))
+		if suffix, ok := strings.CutPrefix(entry, "."); ok {
+			if host == suffix || strings.HasSuffix(host, "."+suffix) {
+				return true
+			}
+			continue
+		}
+		if host == entry {
+			return true
+		}
+	}
+	return false
 }
 
 func decide(action, rule, reason string) Decision {
@@ -82,19 +139,35 @@ func (e *Engine) Evaluate(ev event.Event) Decision {
 			}
 		}
 	} else if ev.Type == "network" {
-		for _, host := range e.cfg.Network.Deny {
-			if strings.EqualFold(strings.TrimSuffix(host, "."), networkHost(ev.Target)) {
-				base = decide("pause", "network-denied", "target hostname is denied by project policy")
-				break
-			}
+		host := networkHost(ev.Target)
+		if hostListed(e.cfg.Network.Deny, host) {
+			base = decide("pause", "network-denied", "target hostname is denied by project policy")
+		} else if e.cfg.Network.Mode == "allowlist" && !hostListed(e.cfg.Network.Allow, host) && !e.granted("network", host) {
+			// Every host outside the allow list needs a human decision for this
+			// run: authority expands only through an explicit grant.
+			base = decide("pause", "network-unlisted", "host is not on the network allow list; authorize it for this run with: saga-watchdog grant network "+host)
 		}
 	} else if ev.Type == "tool" {
 		// Canonical tool identifiers are path-like ("server/tool" for MCP), so
 		// the same segment globs as paths apply: "github/*", "*/delete_*".
+		denied := false
 		for _, pattern := range e.cfg.Tools.Deny {
 			if Match(pattern, ev.Target) {
 				base = decide("pause", "tool-denied", "tool is denied by project policy")
+				denied = true
 				break
+			}
+		}
+		if !denied && e.cfg.Tools.Mode == "allowlist" && !e.granted("tool", ev.Target) {
+			listed := false
+			for _, pattern := range e.cfg.Tools.Allow {
+				if Match(pattern, ev.Target) {
+					listed = true
+					break
+				}
+			}
+			if !listed {
+				base = decide("pause", "tool-unlisted", "tool is not on the tools allow list; authorize it for this run with: saga-watchdog grant tool "+ev.Target)
 			}
 		}
 	}
@@ -190,6 +263,12 @@ func (e *Engine) file(ev event.Event, now time.Time) Decision {
 }
 
 func (e *Engine) escalate(ev event.Event, now time.Time, denied bool) Decision {
+	// A URL and its bare hostname are the same network target, not an
+	// alternative route.
+	target := ev.Target
+	if ev.Type == "network" {
+		target = networkHost(target)
+	}
 	count := denied
 	if !count && len(e.denials) > 0 {
 		// Credential or alternate tool attempts following a denial are explicit
@@ -200,7 +279,7 @@ func (e *Engine) escalate(ev event.Event, now time.Time, denied bool) Decision {
 		for _, prior := range e.denials {
 			if prior.typeID == ev.Type {
 				related = true
-				if prior.target == ev.Target {
+				if prior.target == target {
 					repeated = true
 				}
 			}
@@ -214,7 +293,7 @@ func (e *Engine) escalate(ev event.Event, now time.Time, denied bool) Decision {
 	if !count {
 		return decide("allow", "", "")
 	}
-	e.denials = appendBounded(e.denials, observation{at: now, typeID: ev.Type, target: ev.Target}, e.cfg.Escalation.KillAfter)
+	e.denials = appendBounded(e.denials, observation{at: now, typeID: ev.Type, target: target}, e.cfg.Escalation.KillAfter)
 	n := len(e.denials)
 	reason := fmt.Sprintf("%d denied or related follow-up actions within %s", n, e.cfg.Escalation.Window)
 	switch {

@@ -33,11 +33,18 @@ escalation:
   kill_after: 5
 
 network:
-  # Optional exact-hostname deny list for cooperative check/emit integrations.
-  # Empty by default. This does not block operating-system network traffic.
+  # denylist (default): every host is allowed unless denied.
+  # allowlist: a host must be in allow, or granted for the run with
+  # `saga-watchdog grant network <host>`, or the check pauses the run.
+  # A leading dot covers a domain and its subdomains. Deny always wins.
+  # This governs cooperative checks only; no OS network traffic is blocked.
+  mode: denylist
+  allow: []
   deny: [blocked.example.com]
 
 tools:
-  # Optional deny list for cooperative tool calls by canonical identifier:
+  # Same modes for cooperative tool calls by canonical identifier:
   # MCP tools as server/tool, other tools by name. Path-style globs apply.
+  mode: denylist
+  allow: []
   deny: [github/delete_repository, 'payments/*']
