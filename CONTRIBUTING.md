@@ -107,15 +107,15 @@ There is no public Go API or plugin framework.
 
 ## Release process
 
-There are currently no published releases. Development fixes target `main`.
-Before the first release, maintainers should:
+Releases are tagged from `main`; development fixes land on `main` first.
+Before tagging a release, maintainers should:
 
 1. Verify Linux/macOS CI and the live Docker acceptance test on the intended
    commit. Try the installation and both demos from a clean environment.
 2. Verify private vulnerability reporting and review the documented
    limitations.
-3. Update the README's development status and installation instructions, and
-   the supported-version policy in `SECURITY.md`.
+3. Update the README's release status and installation instructions, and the
+   supported-version policy in `SECURITY.md`.
 4. Create a reviewed `vX.Y.Z` tag on the tested commit.
 
 Pushing such a tag triggers the [release workflow](https://github.com/odbgrowth/saga-watchdog/blob/main/.github/workflows/release.yml).

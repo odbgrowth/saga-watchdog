@@ -36,9 +36,12 @@ example targets Linux. Native Windows named pipes, remote Docker endpoints,
 Swarm/Kubernetes controllers and automatic replacement discovery are not
 supported by this first adapter.
 
-There is no published binary release yet. On a build machine with Git and Go
-1.26 or newer, get the source from `main`. For repeatable deployments, check out
-the reviewed commit you intend to deploy before building:
+The simplest route is a prebuilt Linux archive from the
+[Releases page](https://github.com/odbgrowth/saga-watchdog/releases): verify it
+against `SHA256SUMS`, unpack it and copy `saga-watchdog` to the host. To build
+from source instead, use a build machine with Git and Go 1.26 or newer. For
+repeatable deployments, check out the release tag or the reviewed commit you
+intend to deploy before building:
 
 ```sh
 git clone --branch main --single-branch https://github.com/odbgrowth/saga-watchdog.git

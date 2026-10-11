@@ -23,8 +23,10 @@ security impact. Redact all real secrets and unrelated project data.
 
 ## Supported versions
 
-There are no tagged releases yet. Fixes target `main`; use a reviewed commit
-when testing or deploying. Native Windows supervision is unsupported.
+v0.1.0 is the current release. Fixes target `main` and ship in the next
+tagged release; there is no maintained release branch or backport commitment.
+Report issues against the latest release or `main`. Native Windows supervision
+is unsupported.
 
 ## Trust boundaries
 
