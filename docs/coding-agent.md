@@ -380,6 +380,38 @@ not captured or redacted by Watchdog.
 No analytics, usage tracking, cloud uploads, prompt collection or source-code
 uploads are enabled by the core.
 
+## Reviewing a run with report
+
+`saga-watchdog report [--run ID] [--json]` summarizes one run from its
+recorded state and audit log: status and how it ended, counts of checks,
+reports and observed changes, decisions by rule, every call denied before
+execution, pre-action coverage per producer, and a timeline of policy pauses,
+kills and operator controls. It is a reading of the audit trail, not new
+evidence.
+
+```text
+SAGA Watchdog report
+Run       run_1791750152041_1b29a4be64890a2c0a5a716e3c7a3c89
+Status    killed by watchdog
+Hooks     .claude/settings.json
+Ended by  human-stop: explicit control request
+
+Counts    events 7; checks 2 (allowed 1, denied 1); reports 1; observed changes 0; warnings 0; pauses 1; kills 1
+
+Decisions by rule
+  network-denied               pause     1  last: blocked.example
+
+Pre-action coverage
+  codex                checks    2  reports    0
+
+WARNING   .claude/settings.json carried the Claude Code hook but no pre-action check arrived from it; ...
+```
+
+The warning is the one gap the audit trail can show for a preventive hook:
+the file carried it, but the agent never asked. Typical causes are a hook the
+agent has not trusted yet, a disabled hook, or `saga-watchdog` missing from
+the agent's PATH. `--json` prints the same aggregates for scripts.
+
 ## Integrating tools with check and emit
 
 The child inherits `SAGA_WATCHDOG_RUN_ID` and `SAGA_WATCHDOG_SOCKET`. The latter

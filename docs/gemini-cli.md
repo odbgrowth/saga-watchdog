@@ -93,7 +93,9 @@ itself does not: a hook that cannot start, times out or exits 1 is logged and
 the call proceeds, hooks are skipped in an untrusted folder, and
 `hooksConfig` can switch them off. Keep `saga-watchdog` on PATH, trust the
 project folder, and treat `saga-watchdog gemini doctor` as the pre-flight
-check: it fails when the project settings disable the hook.
+check: it fails when the project settings disable the hook. After a run,
+`saga-watchdog report` warns when `.gemini/settings.json` carried the hook
+but no pre-action check ever arrived from Gemini CLI.
 
 ## 6. Protected configuration
 

@@ -35,6 +35,7 @@ Usage:
   saga-watchdog run -- <command> [args...]
   saga-watchdog status [--run ID]
   saga-watchdog events [--run ID]
+  saga-watchdog report [--run ID] [--json]
   saga-watchdog pause|resume|kill <run-id>
   saga-watchdog check --type TYPE --action ACTION --target TARGET [--run ID]
   saga-watchdog emit --type TYPE --action ACTION --target TARGET --result RESULT [--run ID]
@@ -82,7 +83,7 @@ func cli(args []string) int {
 	g, err := gitinfo.Inspect(cwd)
 	if err != nil {
 		switch args[0] {
-		case "status", "events", "check", "emit", "pause", "resume", "kill":
+		case "status", "events", "report", "check", "emit", "pause", "resume", "kill":
 			// Controls must still work from the original project root if Git metadata
 			// was deleted or corrupted. They contact a live supervisor, never a PID.
 			root, resolveErr := filepath.EvalSymlinks(cwd)
@@ -134,7 +135,7 @@ func cli(args []string) int {
 			return fail(errors.New("usage: saga-watchdog run -- <command> [args...]"))
 		}
 		return run(g, c, hash, args[2:])
-	case "status", "events", "check", "emit":
+	case "status", "events", "report", "check", "emit":
 		return query(g, args[0], args[1:])
 	case "pause", "resume", "kill":
 		if len(args) != 2 {
@@ -236,6 +237,10 @@ func doctor(g gitinfo.Info, c config.Config) int {
 func query(g gitinfo.Info, op string, args []string) int {
 	f := flag.NewFlagSet(op, flag.ContinueOnError)
 	id := f.String("run", "", "run ID (latest in this project by default)")
+	asJSON := false
+	if op == "report" {
+		f.BoolVar(&asJSON, "json", false, "print the report as JSON")
+	}
 	var input socket.Input
 	if op == "check" || op == "emit" {
 		f.StringVar(&input.Type, "type", "", "event type")
@@ -259,6 +264,8 @@ func query(g gitinfo.Info, op string, args []string) int {
 		return fail(err)
 	}
 	switch op {
+	case "report":
+		return report(dir, r, asJSON)
 	case "events":
 		f, err := os.Open(filepath.Join(dir, "events.jsonl"))
 		if err != nil {
