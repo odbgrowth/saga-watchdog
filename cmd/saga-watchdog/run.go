@@ -169,6 +169,10 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
 	stopping, childExited, postExitViolation := false, false, false
+	// stopped records whether the process group is physically SIGSTOPped.
+	// r.Status records the logical pause: an unattended policy pause denies
+	// checks while the group keeps running, so the two can differ.
+	stopped := false
 	postExitFailure := ""
 	rememberExitViolation := func(d policy.Decision) {
 		if postExitFailure != "" {
@@ -229,16 +233,19 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 					// No operator will resume. Leave the process group running and
 					// hold the line through denied pre-action checks instead.
 					fmt.Fprintln(os.Stderr, "Unattended run: process left running; every pre-action check is denied until an explicit resume")
-				} else if err := process.Pause(); err != nil {
-					// Natural-exit cleanup can begin before Done is published. Preserve
-					// the actual policy decision instead of replacing it with a control error.
-					if errors.Is(err, supervisor.ErrFinished) || errors.Is(err, supervisor.ErrTerminating) {
-						childExited = true
-						rememberExitViolation(d)
+				} else {
+					if err := process.Pause(); err != nil {
+						// Natural-exit cleanup can begin before Done is published. Preserve
+						// the actual policy decision instead of replacing it with a control error.
+						if errors.Is(err, supervisor.ErrFinished) || errors.Is(err, supervisor.ErrTerminating) {
+							childExited = true
+							rememberExitViolation(d)
+							return
+						}
+						stop(err.Error(), "control-failed")
 						return
 					}
-					stop(err.Error(), "control-failed")
-					return
+					stopped = true
 				}
 				r.Status = "paused"
 				r.Pauses++
@@ -368,21 +375,29 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 				var err error
 				switch request.Operation {
 				case "pause":
-					if r.Status != "paused" {
+					// An explicit pause stops the group even after an unattended
+					// policy pause left it running.
+					if !stopped {
 						err = process.Pause()
 						if err == nil {
-							r.Status = "paused"
-							r.Pauses++
+							stopped = true
+							if r.Status != "paused" {
+								r.Status = "paused"
+								r.Pauses++
+							}
 						}
 					}
 				case "resume":
-					if r.Status == "paused" {
+					if stopped {
 						err = process.Resume()
 						if err == nil {
-							r.Status = "running"
-							r.Reason = ""
-							r.Rule = ""
+							stopped = false
 						}
+					}
+					if err == nil && r.Status == "paused" {
+						r.Status = "running"
+						r.Reason = ""
+						r.Rule = ""
 					}
 				}
 				if err != nil {

@@ -128,9 +128,11 @@ func TestRunModesAndTimeout(t *testing.T) {
 	}
 }
 
-func TestControlsAndIntegration(t *testing.T) {
-	root := fixture(t, "version: 1\nmode: enforce\nrun:\n  max_duration: 10s\n  stop_grace_period: 50ms\nnetwork:\n  deny: [blocked.example]\n")
-	cmd, out := cliCommand(t, root, "run", "--", "sh", "-c", "sleep 8")
+// liveRun starts a supervised shell script and returns once its sockets are
+// published, with a sender for check/emit and control requests.
+func liveRun(t *testing.T, root, script string) (store.Run, chan error, *bytes.Buffer, func(op string, input socket.Input) socket.Response) {
+	t.Helper()
+	cmd, out := cliCommand(t, root, "run", "--", "sh", "-c", script)
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -167,6 +169,12 @@ ready:
 		}
 		return response
 	}
+	return r, done, out, send
+}
+
+func TestControlsAndIntegration(t *testing.T) {
+	root := fixture(t, "version: 1\nmode: enforce\nrun:\n  max_duration: 10s\n  stop_grace_period: 50ms\nnetwork:\n  deny: [blocked.example]\n")
+	r, done, out, send := liveRun(t, root, "sleep 8")
 	allowed := send("check", socket.Input{Type: "network", Action: "connect", Target: "allowed.example"})
 	if !allowed.Allowed {
 		t.Fatalf("normal check denied: %+v", allowed)
@@ -203,6 +211,58 @@ ready:
 	}
 	if !strings.Contains(string(data), `"action":"resume"`) {
 		t.Fatal("resume not audited")
+	}
+}
+
+func TestExplicitPauseAfterUnattendedPolicyPause(t *testing.T) {
+	root := fixture(t, "version: 1\nmode: enforce\nrun:\n  max_duration: 10s\n  stop_grace_period: 50ms\n  unattended: true\nnetwork:\n  deny: [blocked.example]\n")
+	_, done, out, send := liveRun(t, root, "i=0; while :; do i=$((i+1)); echo $i > tick.txt; sleep 0.02; done")
+	tick := func() string {
+		data, _ := os.ReadFile(filepath.Join(root, "tick.txt"))
+		return string(data)
+	}
+	progressed := func(from string) bool {
+		for i := 0; i < 100; i++ {
+			if tick() != from {
+				return true
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		return false
+	}
+	if denied := send("check", socket.Input{Type: "network", Action: "connect", Target: "blocked.example"}); denied.Allowed {
+		t.Fatalf("denial expected: %+v", denied)
+	}
+	if status := send("status", socket.Input{}); status.Run == nil || status.Run.Status != "paused" || status.Run.Pauses != 1 {
+		t.Fatalf("policy pause not recorded: %+v", status)
+	}
+	if !progressed(tick()) {
+		t.Fatalf("unattended policy pause stopped the process: %s", out)
+	}
+	paused := send("pause", socket.Input{})
+	if paused.Error != "" || paused.Run == nil || paused.Run.Status != "paused" || paused.Run.Pauses != 1 {
+		t.Fatalf("explicit pause: %+v", paused)
+	}
+	if before := tick(); progressed(before) {
+		t.Fatalf("explicit pause left the process running: %s", out)
+	}
+	if resumed := send("resume", socket.Input{}); resumed.Error != "" || resumed.Run == nil || resumed.Run.Status != "running" {
+		t.Fatalf("resume: %+v", resumed)
+	}
+	if !progressed(tick()) {
+		t.Fatalf("resume did not continue the process: %s", out)
+	}
+	if allowed := send("check", socket.Input{Type: "network", Action: "connect", Target: "allowed.example"}); !allowed.Allowed {
+		t.Fatalf("check denied after resume: %+v", allowed)
+	}
+	send("kill", socket.Input{})
+	select {
+	case err := <-done:
+		if exitCode(err) != 125 {
+			t.Fatalf("exit %v: %s", err, out)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("kill did not stop run")
 	}
 }
 

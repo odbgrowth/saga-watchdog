@@ -216,9 +216,10 @@ but does not stop the process group: there is no operator to resume it, and a
 stopped process would simply wait until the run budget kills it. Enforcement
 continues through the pre-action path instead: every later `check` is denied
 with `run-paused` until an explicit `resume`, so a hooked agent cannot act and
-ends on its own. Kill decisions and the run budget are unchanged. Without a
-preventive hook a pause cannot restrain the agent in this mode; SAGA warns at
-startup.
+ends on its own. Kill decisions and the run budget are unchanged. An explicit
+`saga-watchdog pause` still stops the process group, and `resume` continues
+it. Without a preventive hook a pause cannot restrain the agent in this mode;
+SAGA warns at startup.
 
 ## Escalation detection
 
