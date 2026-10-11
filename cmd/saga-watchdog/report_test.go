@@ -24,8 +24,17 @@ func TestReportSummarizesARun(t *testing.T) {
 	r, done, out, send := liveRun(t, root, "sleep 8")
 	send("check", socket.Input{Type: "network", Action: "connect", Target: "allowed.example", Producer: "codex", Tool: "Bash"})
 	send("check", socket.Input{Type: "network", Action: "connect", Target: "blocked.example", Producer: "codex", Tool: "Bash"})
+	// The persisted snapshot lags the supervisor by up to a second; an active
+	// run is reported from the live state.
+	live, liveOut := cliCommand(t, root, "report")
+	if code := exitCode(live.Run()); code != 0 || !strings.Contains(liveOut.String(), "Status    paused") || !strings.Contains(liveOut.String(), "(still running)") {
+		t.Fatalf("live report %d: %s", code, liveOut)
+	}
 	send("resume", socket.Input{})
 	send("emit", socket.Input{Type: "file", Action: "write", Target: "a.txt", Result: "success"})
+	// A post-action report with a check-like result is still a report: it
+	// must neither count as a check nor imply preventive coverage.
+	send("emit", socket.Input{Type: "file", Action: "write", Target: "b.txt", Result: "allowed", Producer: "claude-code", Tool: "Edit"})
 	send("kill", socket.Input{})
 	select {
 	case <-done:
@@ -41,13 +50,14 @@ func TestReportSummarizesARun(t *testing.T) {
 		"Status    killed by watchdog",
 		"Hooks     .claude/settings.json",
 		"Ended by  human-stop",
-		"checks 2 (allowed 1, denied 1); reports 1",
+		"checks 2 (allowed 1, denied 1); reports 2",
 		"pauses 1; kills 1",
 		"network-denied",
 		"last: blocked.example",
 		"network connect blocked.example",
 		"codex                checks    2  reports    0",
 		"check/emit CLI       checks    0  reports    1",
+		"claude-code          checks    0  reports    1",
 		"policy pause",
 		"operator resume",
 		"operator kill",
@@ -65,7 +75,7 @@ func TestReportSummarizesARun(t *testing.T) {
 	if err := json.Unmarshal(raw.Bytes(), &rep); err != nil {
 		t.Fatalf("%v: %s", err, raw)
 	}
-	if rep.Run.ID != r.ID || rep.Counts.Denied != 1 || len(rep.Rules) != 1 || rep.Rules[0].Rule != "network-denied" || len(rep.Denied) != 1 || rep.Denied[0].Producer != "codex" || len(rep.Warnings) != 1 || len(rep.Timeline) != 3 {
+	if rep.Run.ID != r.ID || rep.Counts.Checks != 2 || rep.Counts.Denied != 1 || rep.Counts.Reports != 2 || len(rep.Rules) != 1 || rep.Rules[0].Rule != "network-denied" || len(rep.Denied) != 1 || rep.Denied[0].Producer != "codex" || len(rep.Warnings) != 1 || len(rep.Timeline) != 3 {
 		t.Fatalf("%+v", rep)
 	}
 	_, final, err := store.Locate(root, r.ID)

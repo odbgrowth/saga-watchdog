@@ -423,6 +423,12 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 					}
 					e.Metadata[key] = value
 				}
+				// A pre-action check and a post-action report can share a result
+				// value; the operation keeps them apart for audit readers.
+				if e.Metadata == nil {
+					e.Metadata = map[string]any{}
+				}
+				e.Metadata["operation"] = request.Operation
 				pausedCheck := r.Status == "paused" && request.Operation == "check"
 				if pausedCheck {
 					e.Result = "denied"

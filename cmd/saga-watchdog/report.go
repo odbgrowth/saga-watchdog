@@ -121,8 +121,14 @@ func buildReport(dir string, r store.Run) (Report, error) {
 				c = &Coverage{Producer: producer}
 				coverage[producer] = c
 			}
-			switch e.Result {
-			case "allowed", "denied":
+			// Logs written before the operation was recorded are classified by
+			// the result a check produces.
+			operation, _ := e.Metadata["operation"].(string)
+			if operation == "" && (e.Result == "allowed" || e.Result == "denied") {
+				operation = "check"
+			}
+			switch operation {
+			case "check":
 				rep.Counts.Checks++
 				c.Checks++
 				if e.Result == "allowed" {

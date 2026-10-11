@@ -265,6 +265,13 @@ func query(g gitinfo.Info, op string, args []string) int {
 	}
 	switch op {
 	case "report":
+		// Run state is persisted on a one-second ticker; the supervisor has the
+		// current one while the run is active.
+		if r.Finished == nil {
+			if live, err := socket.Send(r.Control, socket.Request{Operation: "status", RunID: r.ID}); err == nil && live.Run != nil {
+				r = *live.Run
+			}
+		}
 		return report(dir, r, asJSON)
 	case "events":
 		f, err := os.Open(filepath.Join(dir, "events.jsonl"))
