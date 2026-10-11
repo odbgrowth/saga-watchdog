@@ -211,7 +211,7 @@ func TestAllowListModesAndGrants(t *testing.T) {
 		"listed host":        {network("https://API.github.com/repos"), ""},
 		"suffix apex":        {network("pypi.org"), ""},
 		"suffix subdomain":   {network("mirror.pypi.org:443"), ""},
-		"unlisted host":      {network("bit.ly"), "network-unlisted"},
+		"unlisted host":      {network("new.example"), "network-unlisted"},
 		"lookalike":          {network("api.github.com.attacker.test"), "network-unlisted"},
 		"deny wins":          {network("files.pypi.org"), "network-denied"},
 		"listed tool":        {tool("github/get_issue"), ""},
@@ -230,19 +230,19 @@ func TestAllowListModesAndGrants(t *testing.T) {
 	}
 	e := New(cfg, t.TempDir())
 	grant := func(typeID, target string) bool { _, ok := e.Grant(typeID, target); return ok }
-	if !grant("network", "https://BIT.ly/x") || !grant("tool", "payments/charge") || grant("file", "x") || grant("network", "") {
+	if !grant("network", "https://NEW.example/x") || !grant("tool", "payments/charge") || grant("file", "x") || grant("network", "") {
 		t.Fatal("grant acceptance")
 	}
-	if added, ok := e.Grant("network", "bit.ly"); added || !ok {
+	if added, ok := e.Grant("network", "new.example"); added || !ok {
 		t.Fatalf("duplicate grant must be a successful no-op: %t %t", added, ok)
 	}
-	if d := e.Evaluate(network("bit.ly")); d.Action != "allow" {
+	if d := e.Evaluate(network("new.example")); d.Action != "allow" {
 		t.Fatalf("granted host still blocked: %+v", d)
 	}
 	if d := e.Evaluate(tool("payments/charge")); d.Action != "allow" {
 		t.Fatalf("granted tool still blocked: %+v", d)
 	}
-	if d := e.Evaluate(network("www.bit.ly")); d.RuleID != "network-unlisted" {
+	if d := e.Evaluate(network("www.new.example")); d.RuleID != "network-unlisted" {
 		t.Fatalf("grant must be exact: %+v", d)
 	}
 	e.Grant("network", "files.pypi.org")
@@ -263,13 +263,87 @@ func TestAllowListModesAndGrants(t *testing.T) {
 	}
 	// A retry of the same host in URL form is a repeat, not an alternative target.
 	e = New(cfg, t.TempDir())
-	e.Evaluate(network("https://bit.ly/x"))
-	if d := e.Evaluate(network("bit.ly")); d.RuleID != "network-unlisted" || !strings.Contains(d.Reason, "allow list") {
+	e.Evaluate(network("https://new.example/x"))
+	if d := e.Evaluate(network("new.example")); d.RuleID != "network-unlisted" || !strings.Contains(d.Reason, "allow list") {
 		t.Fatalf("repeat counted as alternative target: %+v", d)
 	}
 	// Denylist mode is unchanged: unlisted hosts and tools stay allowed.
 	cfg.Network.Mode, cfg.Tools.Mode = "denylist", "denylist"
-	if d := New(cfg, t.TempDir()).Evaluate(network("bit.ly")); d.Action != "allow" {
+	if d := New(cfg, t.TempDir()).Evaluate(network("new.example")); d.Action != "allow" {
 		t.Fatalf("%+v", d)
+	}
+}
+
+func TestShellFollowUpAndRedirectors(t *testing.T) {
+	cfg := config.Default()
+	cfg.Network.Deny = []string{"blocked.example"}
+	network := func(target string) event.Event {
+		return event.Event{Timestamp: epoch, Type: "network", Action: "connect", Target: target}
+	}
+	shell := event.Event{Timestamp: epoch, Type: "process", Action: "execute", Target: "Bash"}
+	e := New(cfg, t.TempDir())
+	e.Evaluate(network("blocked.example")) // denial 1
+	if d := e.Evaluate(shell); d.Action != "warn" || d.RuleID != "failure-escalation" {
+		t.Fatalf("shell after a denial not counted: %+v", d)
+	}
+	if d := e.Evaluate(shell); d.Action != "allow" {
+		t.Fatalf("second shell command counted again: %+v", d)
+	}
+	if d := e.Evaluate(event.Event{Timestamp: epoch, Type: "tool", Action: "call", Target: "other/tool"}); d.Action != "pause" || d.RuleID != "failure-escalation" {
+		t.Fatalf("third signal did not pause: %+v", d)
+	}
+	// Tool or credential follow-ups do not make the shell eligible again; a
+	// new genuine denial does.
+	e = New(cfg, t.TempDir())
+	e.Evaluate(network("blocked.example"))                                                        // denial 1
+	e.Evaluate(shell)                                                                             // 2, counted
+	e.Evaluate(event.Event{Timestamp: epoch, Type: "tool", Action: "call", Target: "other/tool"}) // 3, pause
+	if d := e.Evaluate(shell); d.RuleID == "failure-escalation" {
+		t.Fatalf("shell counted again without a new denial: %+v", d)
+	}
+	e.Evaluate(network("blocked.example")) // 4, new denial
+	if d := e.Evaluate(shell); d.Action != "kill" || d.RuleID != "failure-escalation" {
+		t.Fatalf("shell after a new denial not counted: %+v", d)
+	}
+	cfg.Escalation.ShellFollowUp = false
+	e = New(cfg, t.TempDir())
+	e.Evaluate(network("blocked.example"))
+	if d := e.Evaluate(shell); d.Action != "allow" {
+		t.Fatalf("shell counted with shell_follow_up disabled: %+v", d)
+	}
+	// A shell command without any prior denial is ordinary work.
+	if d := New(config.Default(), t.TempDir()).Evaluate(shell); d.Action != "allow" || d.RuleID != "" {
+		t.Fatalf("%+v", d)
+	}
+
+	for _, target := range []string{"bit.ly", "https://BIT.LY/3x", "api.bit.ly", "tinyurl.com", "t.co:443"} {
+		if d := New(config.Default(), t.TempDir()).Evaluate(network(target)); d.Action != "pause" || d.RuleID != "network-redirector" {
+			t.Errorf("%s: %+v", target, d)
+		}
+	}
+	for _, target := range []string{"notbit.ly", "bit.ly.example.com", "example.com"} {
+		if d := New(config.Default(), t.TempDir()).Evaluate(network(target)); d.Action != "allow" {
+			t.Errorf("%s: %+v", target, d)
+		}
+	}
+	allowed := config.Default()
+	allowed.Network.Allow = []string{"bit.ly"}
+	if d := New(allowed, t.TempDir()).Evaluate(network("bit.ly")); d.Action != "allow" {
+		t.Fatalf("explicit allow did not override the redirector list: %+v", d)
+	}
+	e = New(config.Default(), t.TempDir())
+	e.Grant("network", "bit.ly")
+	if d := e.Evaluate(network("bit.ly")); d.Action != "allow" {
+		t.Fatalf("grant did not override the redirector list: %+v", d)
+	}
+	off := config.Default()
+	off.Network.DenyRedirectors = false
+	if d := New(off, t.TempDir()).Evaluate(network("bit.ly")); d.Action != "allow" {
+		t.Fatalf("%+v", d)
+	}
+	denied := config.Default()
+	denied.Network.Allow, denied.Network.Deny = []string{"bit.ly"}, []string{"bit.ly"}
+	if d := New(denied, t.TempDir()).Evaluate(network("bit.ly")); d.RuleID != "network-denied" {
+		t.Fatalf("deny must win over allow: %+v", d)
 	}
 }

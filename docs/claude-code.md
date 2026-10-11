@@ -201,8 +201,12 @@ Tools outside the matcher (`Read`, `Glob`, `Grep`, `WebSearch`, `Agent`,
 
 Escalation note: after a denial, a `tool` event with a target not yet seen in
 the window counts as a related follow-up (second related event warns, third
-pauses, fifth kills by default). `process` events for Bash do not. Adjust
-`escalation` thresholds in the policy if MCP-heavy sessions trip this early.
+pauses, fifth kills by default). The first Bash `process` event after a
+denial counts as well (`escalation.shell_follow_up`, on by default): the shell
+is the usual route around a denied tool or host. Later Bash calls do not
+count again until the next denial. Set `shell_follow_up: false` to keep the
+previous behaviour, and adjust `escalation` thresholds in the policy if
+MCP-heavy sessions trip this early.
 
 To refuse specific MCP tools outright, list them under `tools.deny` in the
 policy by canonical identifier, with path-style globs: `github/delete_*`,

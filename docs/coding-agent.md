@@ -147,10 +147,12 @@ escalation:
   warn_after: 2
   pause_after: 3
   kill_after: 5
+  shell_follow_up: true
 network:
   mode: denylist
   allow: []
   deny: [blocked.example.com]
+  deny_redirectors: true
 tools:
   mode: denylist
   allow: []
@@ -162,6 +164,12 @@ Hostnames are normalized from host or URL targets. It governs integration
 checks only; there is no OS network enforcement. In the default `denylist`
 mode other hosts are allowed unless another rule, such as escalation,
 intervenes.
+
+Well-known URL shorteners and redirectors (`bit.ly`, `tinyurl.com`, `t.co`
+and others) pause a run in any mode (`network-redirector`), because agents
+have used them to get around fetch restrictions. Allow or grant a host to
+use it anyway, or set `network.deny_redirectors: false`. The list is a
+tripwire, not a catalogue.
 
 `network.mode: allowlist` turns that around: a host must appear in
 `network.allow`, or be granted for the run by an operator, or the check is
@@ -289,6 +297,13 @@ also contribute. Such a follow-up counts once per distinct target within the
 window: repeating the same allowed tool or host is ordinary work, a different
 one is an alternative target. A repeated denial always counts. Unrelated
 normal events do not justify a claim about intent.
+
+A shell command that follows a denial counts as well, once per denial
+(`escalation.shell_follow_up`, on by default): the shell is the usual route
+around a denied tool or host, and SAGA does not read the command to know
+whether it was. Ordinary follow-on commands after that one are not repeated
+evidence; the next denial is. Set it to `false` for agents that work mostly
+through the shell and rarely trigger denials.
 
 A single reported denial is logged. Under the default thresholds, the second
 related event warns, the third pauses, and the fifth kills. Strong policy-tamper

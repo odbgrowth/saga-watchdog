@@ -114,3 +114,13 @@ func TestAllowListModes(t *testing.T) {
 		}
 	}
 }
+
+func TestShellFollowUpAndRedirectorDefaults(t *testing.T) {
+	if d := Default(); !d.Escalation.ShellFollowUp || !d.Network.DenyRedirectors {
+		t.Fatalf("defaults must count shell follow-ups and deny redirectors: %+v", d)
+	}
+	c, err := Parse(strings.NewReader("version: 1\nprofile: coding-agent\nmode: enforce\nescalation:\n  shell_follow_up: false\nnetwork:\n  deny_redirectors: false\n"))
+	if err != nil || c.Escalation.ShellFollowUp || c.Network.DenyRedirectors {
+		t.Fatalf("overrides not parsed: %+v %v", c, err)
+	}
+}

@@ -36,6 +36,9 @@ type Engine struct {
 	denials   []observation
 	deletions []observation
 	grants    map[string]struct{}
+	// shellCounted records that the shell follow-up for the latest genuine
+	// denial has been counted; only a new denial makes the shell count again.
+	shellCounted bool
 }
 
 // maxGrants bounds operator grants for one run. With targets bounded by the
@@ -140,9 +143,12 @@ func (e *Engine) Evaluate(ev event.Event) Decision {
 		}
 	} else if ev.Type == "network" {
 		host := networkHost(ev.Target)
+		authorized := hostListed(e.cfg.Network.Allow, host) || e.granted("network", host)
 		if hostListed(e.cfg.Network.Deny, host) {
 			base = decide("pause", "network-denied", "target hostname is denied by project policy")
-		} else if e.cfg.Network.Mode == "allowlist" && !hostListed(e.cfg.Network.Allow, host) && !e.granted("network", host) {
+		} else if !authorized && e.cfg.Network.DenyRedirectors && hostListed(Redirectors, host) {
+			base = decide("pause", "network-redirector", "URL shortener or redirector host; allow or grant it explicitly, or set network.deny_redirectors: false")
+		} else if !authorized && e.cfg.Network.Mode == "allowlist" {
 			// Every host outside the allow list needs a human decision for this
 			// run: authority expands only through an explicit grant.
 			base = decide("pause", "network-unlisted", "host is not on the network allow list; authorize it for this run with: saga-watchdog grant network "+host)
@@ -284,14 +290,25 @@ func (e *Engine) escalate(ev event.Event, now time.Time, denied bool) Decision {
 				}
 			}
 		}
-		if ev.Type == "credential" || ev.Type == "tool" {
+		switch {
+		case ev.Type == "credential" || ev.Type == "tool":
 			count = !repeated
-		} else if ev.Type == "network" || ev.Type == "git" {
+		case ev.Type == "network" || ev.Type == "git":
 			count = related && !repeated
+		case ev.Type == "process" && e.cfg.Escalation.ShellFollowUp:
+			// The shell is the route around a denied tool or host. It counts
+			// once per genuine denial: ordinary follow-on commands are not
+			// repeated evidence, and neither tool nor credential follow-ups
+			// make the shell eligible again. Only the next denial does.
+			count = !e.shellCounted
+			e.shellCounted = true
 		}
 	}
 	if !count {
 		return decide("allow", "", "")
+	}
+	if denied {
+		e.shellCounted = false
 	}
 	e.denials = appendBounded(e.denials, observation{at: now, typeID: ev.Type, target: target}, e.cfg.Escalation.KillAfter)
 	n := len(e.denials)
@@ -346,6 +363,15 @@ func rank(action string) int {
 	default:
 		return 0
 	}
+}
+
+// Redirectors are well-known public URL shorteners and redirectors. A leading
+// dot covers subdomains. The list is a tripwire for a reported technique, not
+// a catalogue; projects can allow or grant any entry explicitly.
+var Redirectors = []string{
+	".bit.ly", ".bitly.com", ".tinyurl.com", ".t.co", ".goo.gl", ".is.gd", ".v.gd", ".ow.ly", ".buff.ly", ".rb.gy",
+	".cutt.ly", ".tiny.cc", ".shorturl.at", ".rebrand.ly", ".bl.ink", ".s.id", ".t.ly", ".lnkd.in", ".tr.im", ".soo.gd",
+	".u.to", ".x.co", ".shorte.st", ".adf.ly", ".bc.vc", ".clck.ru", ".surl.li", ".urlz.fr", ".dub.sh", ".short.io", ".snip.ly",
 }
 
 func networkHost(target string) string {
