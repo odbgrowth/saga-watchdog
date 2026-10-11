@@ -292,6 +292,19 @@ func TestShellFollowUpAndRedirectors(t *testing.T) {
 	if d := e.Evaluate(event.Event{Timestamp: epoch, Type: "tool", Action: "call", Target: "other/tool"}); d.Action != "pause" || d.RuleID != "failure-escalation" {
 		t.Fatalf("third signal did not pause: %+v", d)
 	}
+	// Tool or credential follow-ups do not make the shell eligible again; a
+	// new genuine denial does.
+	e = New(cfg, t.TempDir())
+	e.Evaluate(network("blocked.example"))                                                        // denial 1
+	e.Evaluate(shell)                                                                             // 2, counted
+	e.Evaluate(event.Event{Timestamp: epoch, Type: "tool", Action: "call", Target: "other/tool"}) // 3, pause
+	if d := e.Evaluate(shell); d.RuleID == "failure-escalation" {
+		t.Fatalf("shell counted again without a new denial: %+v", d)
+	}
+	e.Evaluate(network("blocked.example")) // 4, new denial
+	if d := e.Evaluate(shell); d.Action != "kill" || d.RuleID != "failure-escalation" {
+		t.Fatalf("shell after a new denial not counted: %+v", d)
+	}
 	cfg.Escalation.ShellFollowUp = false
 	e = New(cfg, t.TempDir())
 	e.Evaluate(network("blocked.example"))

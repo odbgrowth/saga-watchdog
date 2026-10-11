@@ -36,6 +36,9 @@ type Engine struct {
 	denials   []observation
 	deletions []observation
 	grants    map[string]struct{}
+	// shellCounted records that the shell follow-up for the latest genuine
+	// denial has been counted; only a new denial makes the shell count again.
+	shellCounted bool
 }
 
 // maxGrants bounds operator grants for one run. With targets bounded by the
@@ -294,13 +297,18 @@ func (e *Engine) escalate(ev event.Event, now time.Time, denied bool) Decision {
 			count = related && !repeated
 		case ev.Type == "process" && e.cfg.Escalation.ShellFollowUp:
 			// The shell is the route around a denied tool or host. It counts
-			// once per denial: ordinary follow-on commands are not repeated
-			// evidence, the next denial is.
-			count = e.denials[len(e.denials)-1].typeID != "process"
+			// once per genuine denial: ordinary follow-on commands are not
+			// repeated evidence, and neither tool nor credential follow-ups
+			// make the shell eligible again. Only the next denial does.
+			count = !e.shellCounted
+			e.shellCounted = true
 		}
 	}
 	if !count {
 		return decide("allow", "", "")
+	}
+	if denied {
+		e.shellCounted = false
 	}
 	e.denials = appendBounded(e.denials, observation{at: now, typeID: ev.Type, target: target}, e.cfg.Escalation.KillAfter)
 	n := len(e.denials)
