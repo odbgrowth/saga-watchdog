@@ -301,7 +301,9 @@ func (e *Engine) reserveWorker(ev event.Event, d *Decision) {
 			d.Reserved = true
 		}
 	case ev.Result == "failed" || ev.Result == "denied" || ev.Result == "blocked":
-		if paired(ev) {
+		// Pairing proves the report follows the check, not that the start
+		// failed: a self-reported failure never widens the budget.
+		if trust, _ := ev.Metadata["trust"].(string); paired(ev) && trust != "self-reported" {
 			e.workers.remove(ev.Target, reserved)
 		}
 	case paired(ev) && e.workers.promote(ev.Target):

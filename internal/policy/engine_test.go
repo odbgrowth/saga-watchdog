@@ -554,6 +554,12 @@ func TestReplicationRules(t *testing.T) {
 		if d := e.Evaluate(ev("agent", "instance.start", "test-runner-3", "host_l", false, "worker")); d.Authorization == "replication.same_host_workers" {
 			t.Fatalf("unpaired %s report released a reservation: %+v", result, d)
 		}
+		claimed := paired(worker, result)
+		claimed.Metadata["trust"] = "self-reported"
+		e.Evaluate(claimed)
+		if d := e.Evaluate(ev("agent", "instance.start", "test-runner-3", "host_l", false, "worker")); d.Authorization == "replication.same_host_workers" {
+			t.Fatalf("self-reported %s report released a reservation: %+v", result, d)
+		}
 		e.Evaluate(paired(worker, result))
 		// The budget authorizes the next worker; the reported failures may
 		// still escalate in-run, which is a separate concern.
