@@ -54,6 +54,10 @@ type Snapshot struct {
 	// unknown provenance and are observed, never controlled.
 	Discovered      []string `json:"discovered_agents,omitempty"`
 	DiscoveredTotal int      `json:"discovered_agents_total,omitempty"`
+	// DiscoveryUnknown lists agent images whose containers could not be
+	// listed in the latest poll; their earlier containers are not shown as
+	// current.
+	DiscoveryUnknown []string `json:"discovery_unknown,omitempty"`
 }
 
 // maxListedDiscoveries bounds the snapshot list; the audit history records
@@ -66,6 +70,17 @@ const maxListedDiscoveries = 64
 // limit per image and the number of configured images.
 type discovery struct {
 	running map[string]map[string]bool
+	// unknown marks images whose latest listing failed. Their last set is
+	// kept only to avoid reporting unchanged containers again on recovery.
+	unknown map[string]bool
+}
+
+// fail marks image unknown until a listing succeeds again.
+func (d *discovery) fail(image string) {
+	if d.unknown == nil {
+		d.unknown = map[string]bool{}
+	}
+	d.unknown[image] = true
 }
 
 // observe replaces the running set of image and returns the containers that
@@ -82,6 +97,7 @@ func (d *discovery) observe(image string, ids []string, selected map[string]bool
 		}
 		return false
 	}
+	delete(d.unknown, image)
 	next := map[string]bool{}
 	var fresh []string
 	for _, id := range ids {
@@ -97,11 +113,15 @@ func (d *discovery) observe(image string, ids []string, selected map[string]bool
 	return fresh
 }
 
-// list returns the running discovered containers, sorted and bounded, and
-// their total.
-func (d *discovery) list() ([]string, int) {
+// list returns the discovered containers verified running in the latest
+// poll, sorted and bounded, their total, and the images that could not be
+// listed.
+func (d *discovery) list() ([]string, int, []string) {
 	all := map[string]bool{}
-	for _, set := range d.running {
+	for image, set := range d.running {
+		if d.unknown[image] {
+			continue
+		}
 		for id := range set {
 			all[id] = true
 		}
@@ -111,7 +131,12 @@ func (d *discovery) list() ([]string, int) {
 		ids = append(ids, id)
 	}
 	slices.Sort(ids)
-	return ids[:min(len(ids), maxListedDiscoveries)], len(ids)
+	var unknown []string
+	for image := range d.unknown {
+		unknown = append(unknown, image)
+	}
+	slices.Sort(unknown)
+	return ids[:min(len(ids), maxListedDiscoveries)], len(ids), unknown
 }
 
 // Freshness is computed by readers, so a crashed observer cannot leave an
@@ -332,11 +357,17 @@ func Run(ctx context.Context, cfg Config, client *Client, once bool) (err error)
 		}
 		api, err := client.Version(ctx)
 		if err != nil {
-			return nil // poll already reports the unavailable daemon
+			// The poll reports the unavailable daemon; nothing is verified.
+			for _, img := range cfg.AgentImages {
+				found.fail(img.Image)
+			}
+			s.Discovered, s.DiscoveredTotal, s.DiscoveryUnknown = found.list()
+			return nil
 		}
 		for _, img := range cfg.AgentImages {
 			ids, err := client.ContainersOfImage(ctx, api, img.Image)
 			if err != nil {
+				found.fail(img.Image)
 				if reason := safeError(err); reason != discoveryError {
 					discoveryError = reason
 					if err := audit("agent-discovery", img.Image, "unknown", "warning", reason); err != nil {
@@ -352,7 +383,7 @@ func Run(ctx context.Context, cfg Config, client *Client, once bool) (err error)
 				}
 			}
 		}
-		s.Discovered, s.DiscoveredTotal = found.list()
+		s.Discovered, s.DiscoveredTotal, s.DiscoveryUnknown = found.list()
 		return nil
 	}
 	refresh := func() error {

@@ -99,7 +99,12 @@ func New(cfg config.Config, root string, controls ...string) *Engine {
 	cfg.Tools.Allow = append([]string(nil), cfg.Tools.Allow...)
 	cfg.Replication.AllowAgents = append([]string(nil), cfg.Replication.AllowAgents...)
 	cfg.Replication.InferenceEndpoints = append([]string(nil), cfg.Replication.InferenceEndpoints...)
-	cfg.Replication.RemoteHosts = append([]string(nil), cfg.Replication.RemoteHosts...)
+	// Configured hosts take the form reported hosts are classified into.
+	remoteHosts := cfg.Replication.RemoteHosts
+	cfg.Replication.RemoteHosts = nil
+	for _, host := range remoteHosts {
+		cfg.Replication.RemoteHosts = append(cfg.Replication.RemoteHosts, strings.ToLower(strings.TrimSuffix(host, ".")))
+	}
 	effects := make(map[string][]string, len(cfg.Effects))
 	for name, patterns := range cfg.Effects {
 		effects[name] = append([]string(nil), patterns...)
@@ -165,9 +170,13 @@ func decide(action, rule, reason string) Decision {
 	return Decision{Action: action, RuleID: rule, Reason: reason, Severity: severity}
 }
 
-// FileTarget is the project-relative form policy uses for a file target, or
-// the target itself when it cannot be normalized.
+// FileTarget is the canonical project-relative form of a file target: its
+// symlink-resolved name, so every alias of one file is one target, else its
+// lexical name, else the target itself.
 func (e *Engine) FileTarget(target string) string {
+	if resolved, err := normalize(e.root, target, true); err == nil {
+		return resolved
+	}
 	if normalized, err := normalize(e.root, target, false); err == nil {
 		return normalized
 	}
@@ -604,16 +613,26 @@ func (e *Engine) replication(ev event.Event) Decision {
 // declared by trusted policy; they group targets that achieve the same
 // restricted outcome, such as several deployment APIs.
 func (e *Engine) Effects(ev event.Event) []string {
-	target := ev.Target
+	targets := []string{ev.Target}
 	switch ev.Type {
 	case "network":
-		target = networkHost(target)
+		targets = []string{networkHost(ev.Target)}
 	case "file":
-		normalized, err := normalize(e.root, target, false)
-		if err != nil {
-			return nil
+		// Like the file rules, match the lexical and the resolved name.
+		targets = nil
+		for _, follow := range []bool{false, true} {
+			if normalized, err := normalize(e.root, ev.Target, follow); err == nil {
+				targets = append(targets, normalized)
+			}
 		}
-		target = normalized
+	}
+	matches := func(typ, pattern string) bool {
+		for _, target := range targets {
+			if (typ == "network" && hostListed([]string{pattern}, target)) || (typ != "network" && Match(pattern, target)) {
+				return true
+			}
+		}
+		return false
 	}
 	var names []string
 	for name, patterns := range e.cfg.Effects {
@@ -622,7 +641,7 @@ func (e *Engine) Effects(ev event.Event) []string {
 			if typ != ev.Type {
 				continue
 			}
-			if (typ == "network" && hostListed([]string{pattern}, target)) || (typ != "network" && Match(pattern, target)) {
+			if matches(typ, pattern) {
 				names = append(names, name)
 				break
 			}

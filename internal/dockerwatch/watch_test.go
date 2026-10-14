@@ -355,7 +355,7 @@ func TestDiscoveryReportsChurnAndBoundsOnlyTheList(t *testing.T) {
 			t.Fatalf("pass %d: %d new containers reported", pass, len(fresh))
 		}
 		reported += len(fresh)
-		list, total := d.list()
+		list, total, _ := d.list()
 		if len(list) != maxListedDiscoveries || total != 100-boolInt(pass == 0) {
 			t.Fatalf("pass %d: list %d of %d", pass, len(list), total)
 		}
@@ -372,6 +372,18 @@ func TestDiscoveryReportsChurnAndBoundsOnlyTheList(t *testing.T) {
 	d.observe("vllm/vllm-openai", nil, selected)
 	if fresh := d.observe("ghcr.io/acme/agent", []string{id(401)}, selected); len(fresh) != 1 {
 		t.Fatalf("returning container not reported: %v", fresh)
+	}
+	// A failed listing marks the image unknown: its earlier containers are
+	// not shown as running, and are not reported again when it recovers.
+	d.fail("ghcr.io/acme/agent")
+	if list, total, unknown := d.list(); len(list) != 0 || total != 0 || len(unknown) != 1 {
+		t.Fatalf("stale discovery shown as current: %v %d %v", list, total, unknown)
+	}
+	if fresh := d.observe("ghcr.io/acme/agent", []string{id(401)}, selected); len(fresh) != 0 {
+		t.Fatalf("unchanged container reported again after recovery: %v", fresh)
+	}
+	if list, _, unknown := d.list(); len(list) != 1 || len(unknown) != 0 {
+		t.Fatalf("recovered image: %v %v", list, unknown)
 	}
 }
 

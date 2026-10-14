@@ -154,7 +154,9 @@ Configure at most 16 images by plain reference; the match uses Docker's
 `ancestor` filter. Status lists up to 64 running discovered containers under
 `discovered_agents`, with their number in `discovered_agents_total`; the
 history records every discovery. A container that matches several configured
-images counts once, and a selected target never counts.
+images counts once, and a selected target never counts. An image whose
+containers could not be listed in the latest poll appears under
+`discovery_unknown`, and its earlier containers are not shown as running.
 
 Discovery stays observation-only. It never stops, pauses, restarts or removes a
 container, and a discovered container is not adopted as a target. An image

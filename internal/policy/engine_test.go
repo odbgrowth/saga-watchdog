@@ -3,6 +3,8 @@ package policy
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -609,5 +611,33 @@ func TestEscalationNamesTheReplacedDenial(t *testing.T) {
 	}
 	if b, _ := json.Marshal(d); strings.Contains(string(b), "network-denied") || strings.Contains(strings.ToLower(string(b)), "escalates") {
 		t.Fatalf("escalated rule leaked into the protocol: %s", b)
+	}
+}
+
+// Every alias of one file is one target, effects match it by either name,
+// and configured remote hosts take the form reported hosts are given.
+func TestCanonicalFileTargetsAndRemoteHosts(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "private"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("private", filepath.Join(root, "alias")); err != nil {
+		t.Skip("symlinks unavailable:", err)
+	}
+	cfg := config.Default()
+	cfg.Effects = map[string][]string{"secrets.read": {"file:private/**"}}
+	cfg.Replication.RemoteHosts = []string{"Build-02."}
+	e := New(cfg, root)
+	for _, target := range []string{"alias/key", "./private/key", "private/key", filepath.Join(root, "alias", "key")} {
+		if got := e.FileTarget(target); got != "private/key" {
+			t.Errorf("%s -> %s", target, got)
+		}
+		if got := e.Effects(event.Event{Type: "file", Target: target}); len(got) != 1 {
+			t.Errorf("%s effects: %v", target, got)
+		}
+	}
+	d := e.Evaluate(event.Event{Timestamp: epoch, Type: "remote", Action: "execution.attempt", Target: "deploy", Metadata: map[string]any{"host_id": "build-02", "remote": true, "runtime_type": "agent"}})
+	if d.Action != "allow" || d.Authorization != "replication.remote_hosts" {
+		t.Fatalf("configured host with uppercase and trailing dot not matched: %+v", d)
 	}
 }
