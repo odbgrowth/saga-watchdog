@@ -689,6 +689,24 @@ func TestWorkersSharingANameHoldOneSlotEach(t *testing.T) {
 	if d := e.Evaluate(start("", "")); d.RuleID != "unauthorized-agent-replication" {
 		t.Fatalf("one stop freed both slots: %+v", d)
 	}
+	// Only a stop of a same-host worker touches the ledger: a remote stop or
+	// a stop of another runtime type under the same name frees nothing.
+	for name, meta := range map[string]map[string]any{
+		"remote": {"host_id": "build-02", "remote": true, "runtime_type": "worker", "trust": "trusted-integration"},
+		"agent":  {"host_id": "host_l", "remote": false, "runtime_type": "agent", "trust": "trusted-integration"},
+	} {
+		e = New(cfg, t.TempDir())
+		e.Evaluate(start("", ""))
+		e.Evaluate(start("success", "trusted-integration"))
+		e.Evaluate(start("", ""))
+		e.Evaluate(start("success", "trusted-integration"))
+		other := stop
+		other.Metadata = meta
+		e.Evaluate(other)
+		if d := e.Evaluate(start("", "")); d.RuleID != "unauthorized-agent-replication" {
+			t.Fatalf("%s stop freed a local worker's slot: %+v", name, d)
+		}
+	}
 	// A stop with no running worker of its name never releases an
 	// outstanding reservation: only that check's paired report can.
 	e = New(cfg, t.TempDir())

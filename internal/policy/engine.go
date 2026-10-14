@@ -546,8 +546,10 @@ func (e *Engine) replication(ev event.Event) Decision {
 		// self-reported stop is recorded but frees nothing: the agent's own
 		// word never widens its budget.
 		// A stop ends a running worker; it never touches an outstanding
-		// reservation, which only its own paired report can release.
-		if trust, _ := ev.Metadata["trust"].(string); report(ev) && ev.Result == "success" && trust != "self-reported" {
+		// reservation, which only its own paired report can release. Only a
+		// stop that names a same-host worker touches the worker ledger.
+		trust, _ := ev.Metadata["trust"].(string)
+		if report(ev) && ev.Result == "success" && trust != "self-reported" && runtimeType == "worker" && !remote {
 			e.workers.remove(ev.Target, running)
 		}
 		return decide("allow", "", "")

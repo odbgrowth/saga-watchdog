@@ -257,8 +257,8 @@ own word never widens it:
   when the report is paired with the check and comes from a trusted
   integration.
 - A trusted successful stop report
-  (`emit --type agent --action instance.stop --result success`) frees the slot
-  of one running worker of that name. It never releases an unconfirmed
+  (`emit --type agent --action instance.stop --runtime-type worker --result
+  success`, on this host) frees the slot of one running worker of that name. It never releases an unconfirmed
   reservation. The check before a stop, a failed stop and a self-reported
   stop free nothing.
 - A worker that policy refused but that reports it started anyway takes a
