@@ -345,11 +345,12 @@ func TestSelfReportedReplicationPersistsCappedDecision(t *testing.T) {
 	}
 }
 
-// A trusted report is skipped by correlation only when it mirrors a check of
-// the same action; a report whose pre-hook failed open is correlated. A
-// denial escalated to kill persists as a kill restriction.
+// A trusted report is skipped by correlation only when it mirrors an allowed
+// check of the same action; a report whose pre-hook failed open is
+// correlated, also after a denied check of the same target. A denial
+// escalated to kill persists as a kill restriction.
 func TestTrustedReportsAndEscalatedKillsPersist(t *testing.T) {
-	root := fixture(t, authorityPolicy)
+	root := fixture(t, authorityPolicy+"replication:\n  allow_agents: [claude]\ntools:\n  deny: ['payments/*']\n")
 	t.Setenv("SAGA_WATCHDOG_OPERATOR", "human:onno")
 	deploy := socket.Input{Type: "network", Action: "connect", Target: "deploy.example.com", Producer: "saga-watchdog"}
 
@@ -359,49 +360,78 @@ func TestTrustedReportsAndEscalatedKillsPersist(t *testing.T) {
 	}
 	endRun(t, doneA, outA, sendA)
 
+	// A denied check is followed by no report, so a later report of the same
+	// target (no call ID, as from Gemini) is an unpaired action.
 	_, doneB, outB, sendB := liveRun(t, root, "sleep 15")
+	if d := sendB("check", deploy); d.Allowed {
+		t.Fatalf("run B denial: %+v", d.Decision)
+	}
+	sendB("resume", socket.Input{})
 	report := deploy
 	report.Result = "success"
-	report.CallID = "call-1"
 	if d := sendB("emit", report); d.Decision == nil || d.Decision.RuleID != "authority-expansion-after-denial" {
 		t.Fatalf("unpaired trusted report not correlated: %+v", d.Decision)
 	}
-	sendB("resume", socket.Input{})
-	paired := deploy
-	paired.CallID = "call-2"
-	sendB("check", paired)
-	sendB("resume", socket.Input{})
-	paired.Result = "success"
-	sendB("emit", paired)
 	endRun(t, doneB, outB, sendB)
-	if code, text := runCLI(t, root, nil, "authority", "status"); code != 0 || !strings.Contains(text, "attempts 3") {
-		t.Fatalf("want one attempt per action (denial, unpaired report, paired check): %d %s", code, text)
+
+	// An allowed, correlated check and its report count once.
+	_, doneP, outP, sendP := liveRun(t, root, "sleep 15")
+	agent := socket.Input{Type: "agent", Action: "instance.start", Target: "claude", Producer: "saga-watchdog", CallID: "call-1"}
+	if d := sendP("check", agent); !d.Allowed || d.Decision.RuleID != "authority-expansion-after-denial" {
+		t.Fatalf("authorized agent in a restricted context: %+v", d.Decision)
+	}
+	agent.Result = "success"
+	sendP("emit", agent)
+	endRun(t, doneP, outP, sendP)
+	if code, text := runCLI(t, root, nil, "authority", "status"); code != 0 || !strings.Contains(text, "attempts 4") {
+		t.Fatalf("want one attempt per action (denial, denied check, unpaired report, paired check): %d %s", code, text)
 	}
 
-	// Repeated denials escalate to kill in one run; the restriction follows.
+	// A correlated attempt that base policy allows reaches kill_after across
+	// runs: the matched restriction itself becomes a kill restriction.
 	_, doneC, outC, sendC := liveRun(t, root, "sleep 15")
+	if d := sendC("check", socket.Input{Type: "tool", Action: "call", Target: "vercel/deploy", Producer: "saga-watchdog"}); d.Decision.Action != "kill" || d.Decision.RuleID != "authority-expansion-after-denial" {
+		t.Fatalf("fifth attempt across runs: %+v", d.Decision)
+	}
+	waitDone := func(done chan error, out interface{ String() string }) {
+		t.Helper()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("kill did not stop the run: %s", out.String())
+		}
+	}
+	waitDone(doneC, outC)
+	// Repeated denials of a new target escalate to kill within one run; the
+	// new restriction records the kill.
+	_, doneD, outD, sendD := liveRun(t, root, "sleep 15")
 	var last socket.Response
 	for range 5 {
-		last = sendC("check", deploy)
+		last = sendD("check", socket.Input{Type: "tool", Action: "call", Target: "payments/charge", Producer: "saga-watchdog"})
 		if last.Decision != nil && last.Decision.Action == "kill" {
 			break
 		}
 	}
-	if last.Decision == nil || last.Decision.Action != "kill" {
-		t.Fatalf("no escalation to kill: %+v", last.Decision)
+	if last.Decision == nil || last.Decision.Action != "kill" || last.Decision.RuleID != "failure-escalation" {
+		t.Fatalf("no in-run escalation to kill: %+v", last.Decision)
 	}
-	select {
-	case <-doneC:
-	case <-time.After(5 * time.Second):
-		t.Fatalf("kill did not stop the run: %s", outC.String())
-	}
+	waitDone(doneD, outD)
 	code, text := runCLI(t, root, nil, "authority", "status")
 	if code != 0 {
 		t.Fatalf("authority status %d: %s", code, text)
 	}
-	for _, line := range strings.Split(text, "\n") {
-		if strings.Contains(line, "network-denied") && !strings.Contains(line, " kill ") {
-			t.Fatalf("escalated kill persisted as %s", line)
+	for _, rule := range []string{"network-denied", "tool-denied"} {
+		found := false
+		for _, line := range strings.Split(text, "\n") {
+			if strings.Contains(line, rule) {
+				found = true
+				if !strings.Contains(line, " kill ") {
+					t.Fatalf("enforced kill persisted as %s", line)
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("no %s restriction: %s", rule, text)
 		}
 	}
 }

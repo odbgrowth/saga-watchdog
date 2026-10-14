@@ -435,20 +435,29 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 	// strongest action that took effect for the event, so an escalated kill
 	// upgrades it and capped self-reported evidence does not.
 	enforced := func(e event.Event, base, d policy.Decision) policy.Decision {
+		if base.Escalates != "" {
+			// In-run escalation replaced a concrete denial; the restriction
+			// is that denial, enforced with the escalated action.
+			base = policy.Decide(base.Action, base.Escalates, base.Reason)
+		}
 		eff := capSelfReported(e, base)
 		if d.Action == "kill" && eff.Action == "pause" {
 			eff.Action = "kill"
 		}
 		return eff
 	}
-	persist := func(e event.Event, base policy.Decision, m *authority.Match) {
+	// persist records an enforced event's effect on persistent state: the
+	// matched restriction's next attempt, upgraded to kill when a kill took
+	// effect, and a new restriction for a persistable base rule.
+	persist := func(e event.Event, base, d policy.Decision, m *authority.Match) {
 		if authStore == nil || c.Mode != "enforce" {
 			return
 		}
+		base = enforced(e, base, d)
 		now := time.Now().UTC()
 		a := attemptOf(e)
 		if m != nil {
-			if err := authStore.Attempt(now, m.Restriction.ID, authority.Link{At: now, RunID: r.ID, EventID: e.ID, InstanceID: inst.ID, SessionID: a.SessionID, HostID: a.HostID, Type: e.Type, Target: a.Target, Correlation: m.Correlation}); err != nil {
+			if err := authStore.Attempt(now, m.Restriction.ID, authority.Link{At: now, RunID: r.ID, EventID: e.ID, InstanceID: inst.ID, SessionID: a.SessionID, HostID: a.HostID, Type: e.Type, Target: a.Target, Correlation: m.Correlation}, d.Action); err != nil {
 				stop("cannot persist authority state: "+err.Error(), "authority-state-failed")
 				return
 			}
@@ -471,7 +480,7 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 			stop("audit write failed: "+err.Error(), "audit-failed")
 			return
 		}
-		persist(e, enforced(e, base, d), m)
+		persist(e, base, d, m)
 		apply(d)
 	}
 	for {
@@ -698,11 +707,7 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 				callID, _ := e.Metadata["tool_use_id"].(string)
 				pair := strings.Join([]string{e.Type, canonical(e), callID}, "\x00")
 				mirrored := request.Operation == "emit" && trustOf(e) == "trusted-integration" && checked[pair]
-				if request.Operation == "check" {
-					if len(checked) < maxChecked {
-						checked[pair] = true
-					}
-				} else {
+				if request.Operation == "emit" {
 					delete(checked, pair)
 				}
 				if !mirrored {
@@ -713,6 +718,10 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 					d = policy.Decision{Action: "pause", RuleID: "run-paused", Reason: "run is paused; explicit resume required", Severity: "high"}
 				}
 				allowed := permits(c.Mode, d) && !pausedCheck
+				// Only an allowed check is followed by a report of its action.
+				if request.Operation == "check" && allowed && len(checked) < maxChecked {
+					checked[pair] = true
+				}
 				// The decision above used the submitted path. Record an absolute
 				// in-project path by its project-relative name for readability.
 				if e.Type == "file" && filepath.IsAbs(e.Target) {
@@ -767,7 +776,7 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 					stop(err.Error(), "audit-failed")
 					continue
 				}
-				persist(e, enforced(e, base, d), match)
+				persist(e, base, d, match)
 				response := socket.Response{Allowed: allowed, Decision: &d}
 				if allowed && child != nil {
 					response.Instance = child

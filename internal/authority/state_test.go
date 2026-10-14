@@ -118,7 +118,7 @@ func TestRestrictionsPersistCorrelateExpireAndClear(t *testing.T) {
 			t.Errorf("%s correlated: %+v", name, m)
 		}
 	}
-	if err := other.Attempt(now, pause.ID, Link{At: now, RunID: "run_b", EventID: "evt_9", SessionID: "sess-2", Type: "tool", Target: "vercel/deploy", Correlation: "alternate route"}); err != nil {
+	if err := other.Attempt(now, pause.ID, Link{At: now, RunID: "run_b", EventID: "evt_9", SessionID: "sess-2", Type: "tool", Target: "vercel/deploy", Correlation: "alternate route"}, "pause"); err != nil {
 		t.Fatal(err)
 	}
 	st, _ = s.Current()

@@ -24,6 +24,10 @@ type Decision struct {
 	// agent instance or runtime, such as replication.allow_agents. It is
 	// provenance, kept even when escalation raises the action.
 	Authorization string `json:"authorization,omitempty"`
+	// Escalates is the rule of the base decision an escalation replaced, so
+	// the supervisor can persist what the concrete denial was. Not part of
+	// the protocol.
+	Escalates string `json:"-"`
 }
 
 type observation struct {
@@ -245,6 +249,7 @@ func (e *Engine) Evaluate(ev event.Event) (d Decision) {
 	d = base
 	if rank(escalation.Action) > rank(base.Action) || (base.RuleID == "" && escalation.RuleID != "") {
 		escalation.Authorization = base.Authorization
+		escalation.Escalates = base.RuleID
 		d = escalation
 	}
 	return d

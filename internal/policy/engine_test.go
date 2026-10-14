@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -562,5 +563,23 @@ func TestEffectsAndSelfClear(t *testing.T) {
 	}
 	if Persistable(Decision{Action: "pause", RuleID: "failure-escalation"}) || Persistable(Decision{Action: "warn", RuleID: "network-denied"}) {
 		t.Fatal("derived or warning decisions must not persist")
+	}
+}
+
+// An escalation that replaces a concrete denial names it for persistence,
+// without adding it to the protocol.
+func TestEscalationNamesTheReplacedDenial(t *testing.T) {
+	cfg := config.Default()
+	cfg.Network.Deny = []string{"deploy.example.com"}
+	e := New(cfg, t.TempDir())
+	var d Decision
+	for range 5 {
+		d = e.Evaluate(event.Event{Timestamp: epoch, Type: "network", Action: "connect", Target: "deploy.example.com"})
+	}
+	if d.RuleID != "failure-escalation" || d.Action != "kill" || d.Escalates != "network-denied" {
+		t.Fatalf("%+v", d)
+	}
+	if b, _ := json.Marshal(d); strings.Contains(string(b), "network-denied") || strings.Contains(strings.ToLower(string(b)), "escalates") {
+		t.Fatalf("escalated rule leaked into the protocol: %s", b)
 	}
 }
