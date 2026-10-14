@@ -23,11 +23,26 @@ func signalOwnedGroup(pgid int, sig unix.Signal) error {
 	if inspectErr != nil {
 		return errors.Join(err, fmt.Errorf("inspect owned process group: %w", inspectErr))
 	}
-	const zombie = 5 // SZOMB in Darwin sys/proc.h.
-	for _, member := range members {
-		if member.Proc.P_stat != zombie {
-			return err
-		}
+	if anyLive(members) {
+		return err
 	}
 	return nil
+}
+
+// anyLive reports whether a process group member can still run user code. A
+// zombie cannot, and neither can a process already in exit: XNU marks it
+// P_LEXIT before it drops the references killpg needs and long before it
+// becomes a zombie, so killpg skips it and reports EPERM. kern.proc.pgrp
+// exports P_LEXIT as P_WEXIT (bsd/kern/kern_sysctl.c, fill_user64_externproc).
+func anyLive(members []unix.KinfoProc) bool {
+	const (
+		zombie  = 5          // SZOMB in Darwin sys/proc.h.
+		exiting = 0x00002000 // P_WEXIT in Darwin sys/proc.h.
+	)
+	for _, member := range members {
+		if member.Proc.P_stat != zombie && member.Proc.P_flag&exiting == 0 {
+			return true
+		}
+	}
+	return false
 }
