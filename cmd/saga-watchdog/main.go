@@ -263,7 +263,7 @@ func query(g gitinfo.Info, op string, args []string) int {
 		f.StringVar(&input.RuntimeType, "runtime-type", "", "agent, worker, model-server or inference-endpoint")
 		if op == "emit" {
 			f.StringVar(&input.Result, "result", "", "observed result")
-			f.StringVar(&input.Instance, "instance", "", "instance an agent.instance.stop ends, as returned for its start")
+			f.StringVar(&input.Instance, "instance", "", "instance a stop ends or a start report confirms, as returned for its start check")
 		}
 	}
 	if err := f.Parse(args); err != nil {

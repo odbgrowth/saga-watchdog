@@ -42,9 +42,10 @@ type Input struct {
 	// can only narrow what replication policy allows.
 	Host        string `json:"host,omitempty"`
 	RuntimeType string `json:"runtime_type,omitempty"`
-	// Instance names the instance an agent.instance.stop ends: the instance
-	// ID the supervisor returned for its start. A stop frees only that
-	// instance's worker slot.
+	// Instance names an instance by the ID the supervisor returned for its
+	// start check: the instance an agent.instance.stop ends, or the instance
+	// a start report confirms. A stop frees only that instance's worker
+	// slot; a report naming it pairs with exactly that check.
 	Instance string `json:"instance,omitempty"`
 }
 
@@ -140,8 +141,12 @@ func Validate(r Request, controls bool) error {
 	if !slices.Contains(RuntimeTypes, r.Event.RuntimeType) {
 		return errors.New("runtime_type must be agent, worker, model-server or inference-endpoint")
 	}
-	if r.Event.Instance != "" && (r.Event.Type != "agent" || r.Event.Action != "instance.stop") {
-		return errors.New("instance names the instance an agent.instance.stop ends")
+	if r.Event.Instance != "" {
+		stop := r.Event.Type == "agent" && r.Event.Action == "instance.stop"
+		start := r.Operation == "emit" && r.Event.Type != "remote" && !strings.HasSuffix(r.Event.Action, ".discovered") && len(expansionActions[r.Event.Type]) > 0
+		if !stop && !start {
+			return errors.New("instance names the instance an agent.instance.stop ends or a start report confirms")
+		}
 	}
 	if len(r.Event.Instance) > 128 || strings.ContainsFunc(r.Event.Instance, func(c rune) bool { return c < 0x21 || c > 0x7e }) {
 		return errors.New("instance must be at most 128 printable ASCII bytes without spaces")

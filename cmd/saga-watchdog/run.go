@@ -741,7 +741,13 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 				var prior pendingCheck
 				paired := false
 				if request.Operation == "emit" {
-					prior, paired = pending.take(actionKey, time.Now(), trustOf(e))
+					// A start report that names its instance pairs with exactly
+					// that check; without one, with the oldest of its action.
+					named := ""
+					if creation {
+						named = request.Event.Instance
+					}
+					prior, paired = pending.take(actionKey, time.Now(), trustOf(e), named)
 				}
 				e.Metadata[policy.PairedKey] = paired
 				// Worker slots are kept by instance: a start gets its instance

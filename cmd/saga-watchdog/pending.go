@@ -50,12 +50,14 @@ func (p *pendingChecks) add(key string, now time.Time, trust string, instance *a
 	p.count++
 }
 
-// take removes and returns the oldest unexpired check of key with trust.
-func (p *pendingChecks) take(key string, now time.Time, trust string) (pendingCheck, bool) {
+// take removes and returns the oldest unexpired check of key with trust. A
+// report that names its instance takes exactly that instance's check, or
+// none.
+func (p *pendingChecks) take(key string, now time.Time, trust, instance string) (pendingCheck, bool) {
 	p.expire(key, now)
 	q := p.queues[key]
 	for i, c := range q {
-		if c.trust != trust {
+		if c.trust != trust || (instance != "" && (c.instance == nil || c.instance.ID != instance)) {
 			continue
 		}
 		p.count--

@@ -257,8 +257,11 @@ own word never widens it:
   `allow_agents` never adds worker slots.
 - Every slot belongs to one instance ID, which the response to the start
   check (or to an unpaired start report) returns. The report the supervisor
-  pairs with that check (same producer, session, agent and action) confirms
-  the slot instead of taking another, however late it arrives.
+  pairs with that check confirms the slot instead of taking another, however
+  late it arrives. A report that names the instance (`emit --instance
+  agtinst_...`) pairs with exactly that check. Without a name it pairs with
+  the oldest open check of the same producer, session, agent and action, so
+  name the instance when one action can start several workers.
 - A start reported as `failed`, `denied` or `blocked` releases its slot only
   when the report is paired with the check and comes from a trusted
   integration.

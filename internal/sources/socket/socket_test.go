@@ -236,6 +236,7 @@ func TestExpansionEventsAndSelfReportedAuthorityClaims(t *testing.T) {
 		`{"operation":"emit","event":{"type":"runtime","action":"copy","target":"bundle","result":"success"}}`,
 		`{"operation":"check","event":{"type":"authority","action":"clear","target":"persistent-state"}}`,
 		`{"operation":"emit","event":{"type":"agent","action":"instance.stop","target":"runner","result":"success","runtime_type":"worker","instance":"agtinst_1"}}`,
+		`{"operation":"emit","event":{"type":"agent","action":"instance.start","target":"runner","result":"success","runtime_type":"worker","instance":"agtinst_1"}}`,
 	} {
 		if _, err := Decode([]byte(input), false); err != nil {
 			t.Errorf("%s: %v", input, err)
@@ -251,8 +252,10 @@ func TestExpansionEventsAndSelfReportedAuthorityClaims(t *testing.T) {
 		`{"operation":"check","event":{"type":"agent","action":"approve","target":"b"}}`,
 		`{"operation":"check","event":{"type":"agent","action":"instance.start","target":"b","runtime_type":"root"}}`,
 		`{"operation":"check","event":{"type":"remote","action":"execution.attempt","target":"b","host":"bad host"}}`,
-		// Only a stop names the instance it ends.
+		// Only a stop or a start report names an instance; a check gets one.
 		`{"operation":"check","event":{"type":"agent","action":"instance.start","target":"b","instance":"agtinst_1"}}`,
+		`{"operation":"emit","event":{"type":"agent","action":"instance.discovered","target":"b","result":"success","instance":"agtinst_1"}}`,
+		`{"operation":"emit","event":{"type":"tool","action":"call","target":"b","result":"success","instance":"agtinst_1"}}`,
 		`{"operation":"emit","event":{"type":"agent","action":"instance.stop","target":"b","result":"success","instance":"bad id"}}`,
 	} {
 		if _, err := Decode([]byte(input), false); err == nil {

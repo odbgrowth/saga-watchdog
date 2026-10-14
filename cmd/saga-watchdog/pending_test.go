@@ -16,21 +16,21 @@ func TestPendingChecks(t *testing.T) {
 	first, second := &authority.Instance{ID: "a"}, &authority.Instance{ID: "b"}
 	p.add("start", now, "trusted-integration", first, false)
 	p.add("start", now.Add(time.Second), "trusted-integration", second, false)
-	if _, ok := p.take("start", now.Add(2*time.Second), "self-reported"); ok {
+	if _, ok := p.take("start", now.Add(2*time.Second), "self-reported", ""); ok {
 		t.Fatal("a self-reported report took a trusted check")
 	}
-	if c, ok := p.take("start", now.Add(2*time.Second), "trusted-integration"); !ok || c.instance != first {
+	if c, ok := p.take("start", now.Add(2*time.Second), "trusted-integration", ""); !ok || c.instance != first {
 		t.Fatalf("first report: %v %+v", ok, c)
 	}
-	if c, ok := p.take("start", now.Add(3*time.Second), "trusted-integration"); !ok || c.instance != second {
+	if c, ok := p.take("start", now.Add(3*time.Second), "trusted-integration", ""); !ok || c.instance != second {
 		t.Fatalf("second report: %v %+v", ok, c)
 	}
-	if _, ok := p.take("start", now.Add(4*time.Second), "trusted-integration"); ok {
+	if _, ok := p.take("start", now.Add(4*time.Second), "trusted-integration", ""); ok {
 		t.Fatal("a third report paired with no check")
 	}
 	// A check whose report never came does not pair after the window.
 	p.add("start", now, "trusted-integration", first, false)
-	if _, ok := p.take("start", now.Add(2*time.Minute), "trusted-integration"); ok || p.count != 0 {
+	if _, ok := p.take("start", now.Add(2*time.Minute), "trusted-integration", ""); ok || p.count != 0 {
 		t.Fatalf("abandoned check paired or kept: %d", p.count)
 	}
 	// Full: expired checks make room; unexpired ones are never evicted.
@@ -38,11 +38,11 @@ func TestPendingChecks(t *testing.T) {
 		p.add(key, now, "self-reported", nil, false)
 	}
 	p.add("d", now.Add(time.Second), "self-reported", nil, false)
-	if _, ok := p.take("d", now.Add(time.Second), "self-reported"); ok {
+	if _, ok := p.take("d", now.Add(time.Second), "self-reported", ""); ok {
 		t.Fatal("bound exceeded")
 	}
 	p.add("d", now.Add(2*time.Minute), "self-reported", nil, false)
-	if _, ok := p.take("d", now.Add(2*time.Minute), "self-reported"); !ok || p.count != 0 {
+	if _, ok := p.take("d", now.Add(2*time.Minute), "self-reported", ""); !ok || p.count != 0 {
 		t.Fatalf("expired checks not pruned when full: %d", p.count)
 	}
 	// A check holding a worker reservation is kept even when the queue is
@@ -51,7 +51,7 @@ func TestPendingChecks(t *testing.T) {
 		p.add(key, now, "self-reported", nil, false)
 	}
 	p.add("worker", now, "trusted-integration", first, true)
-	if c, ok := p.take("worker", now.Add(time.Second), "trusted-integration"); !ok || c.instance != first {
+	if c, ok := p.take("worker", now.Add(time.Second), "trusted-integration", ""); !ok || c.instance != first {
 		t.Fatalf("a reserved worker check was dropped when full: %v %+v", ok, c)
 	}
 	// It never expires either: a late report still confirms its reservation,
@@ -59,10 +59,23 @@ func TestPendingChecks(t *testing.T) {
 	p = newPendingChecks(time.Minute, 3)
 	p.add("worker", now, "trusted-integration", second, true)
 	p.add("worker", now, "trusted-integration", first, false)
-	if c, ok := p.take("worker", now.Add(time.Hour), "trusted-integration"); !ok || c.instance != second {
+	if c, ok := p.take("worker", now.Add(time.Hour), "trusted-integration", ""); !ok || c.instance != second {
 		t.Fatalf("a late report lost its reserved check: %v %+v", ok, c)
 	}
-	if _, ok := p.take("worker", now.Add(time.Hour), "trusted-integration"); ok || p.count != 0 {
+	if _, ok := p.take("worker", now.Add(time.Hour), "trusted-integration", ""); ok || p.count != 0 {
 		t.Fatalf("an expired unreserved check paired or stayed: %d", p.count)
+	}
+	// A report that names its instance takes exactly that check, past an
+	// older abandoned one, and a name without a pending check takes none.
+	p.add("worker", now, "trusted-integration", first, true)
+	p.add("worker", now, "trusted-integration", second, true)
+	if _, ok := p.take("worker", now, "trusted-integration", "unknown"); ok {
+		t.Fatal("a report naming an unknown instance paired")
+	}
+	if c, ok := p.take("worker", now, "trusted-integration", "b"); !ok || c.instance != second {
+		t.Fatalf("a named report took another check: %v %+v", ok, c)
+	}
+	if c, ok := p.take("worker", now, "trusted-integration", ""); !ok || c.instance != first {
+		t.Fatalf("the abandoned check was lost: %v %+v", ok, c)
 	}
 }

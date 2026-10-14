@@ -790,3 +790,26 @@ func TestReportsPairWithTheirOwnProducer(t *testing.T) {
 	}
 	endRun(t, done, out, send)
 }
+
+// A start report that names its instance pairs with exactly that check, so an
+// abandoned reservation of the same action never captures it.
+func TestNamedReportsPairWithTheirOwnCheck(t *testing.T) {
+	root := fixture(t, "version: 1\nmode: enforce\nrun:\n  max_duration: 20s\n  stop_grace_period: 50ms\nreplication:\n  same_host_workers: 3\n")
+	_, done, out, send := liveRun(t, root, "sleep 15")
+	start := socket.Input{Type: "agent", Action: "instance.start", Target: "runner", Producer: "saga-watchdog", RuntimeType: "worker"}
+	abandoned, mine := send("check", start), send("check", start)
+	if abandoned.Instance == nil || mine.Instance == nil {
+		t.Fatalf("checks: %+v %+v", abandoned.Decision, mine.Decision)
+	}
+	report := start
+	report.Result, report.Instance = "success", mine.Instance.ID
+	if r := send("emit", report); r.Instance == nil || r.Instance.ID != mine.Instance.ID {
+		t.Fatalf("named report took another check: got %+v, want %s", r.Instance, mine.Instance.ID)
+	}
+	// The named check's slot runs: its stop frees it for the next worker.
+	send("emit", socket.Input{Type: "agent", Action: "instance.stop", Target: "runner", Producer: "saga-watchdog", RuntimeType: "worker", Result: "success", Instance: mine.Instance.ID})
+	if next := send("check", start); !next.Allowed || !strings.Contains(next.Decision.Reason, "(2 of 3)") {
+		t.Fatalf("the named worker's stop did not free its slot: %+v", next.Decision)
+	}
+	endRun(t, done, out, send)
+}

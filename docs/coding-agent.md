@@ -97,8 +97,9 @@ escalation scenarios.
 
 `check` and `emit` also accept `--run ID` to address a project run explicitly,
 and `--host` and `--runtime-type` for agent, runtime, inference and remote
-events. `emit` of `agent.instance.stop` takes `--instance ID`: the instance ID
-the supervisor returned for that worker's start. See [Authority across runs, sessions and agent instances](authority.md).
+events. `emit` of a start report or of `agent.instance.stop` takes
+`--instance ID`: the instance ID the supervisor returned for that start check.
+See [Authority across runs, sessions and agent instances](authority.md).
 Control commands take the run ID positionally; flags belong to their command,
 not before the command name. Coding-agent commands load `.saga-watchdog.yaml`
 from the Git project root; Docker mode has its own `--config` option.
@@ -562,8 +563,8 @@ An event may also carry optional bounded identifiers, each at most 128
 printable ASCII bytes without spaces: `producer`, `tool`, `agent_id`,
 `agent_type`, `call_id` and `session_id`. They are recorded as metadata for
 correlation only. Agent, runtime, inference and remote events may add `host`
-and `runtime_type`, and `agent.instance.stop` may add `instance`, the instance
-it ends. Any other field is rejected.
+and `runtime_type`. A start report or `agent.instance.stop` may add
+`instance`, the instance it confirms or ends. Any other field is rejected.
 
 Every recorded event carries a `trust` label: `observed` for Watchdog's own
 evidence, `trusted-integration` for a configured hook producer, and
