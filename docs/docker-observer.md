@@ -19,6 +19,8 @@ in this mode.
   invalidate the CPU baseline.
 - Live lifecycle, OOM and health events. Docker disconnections and reconnects
   are logged. Periodic inspection reconciles the present state after gaps.
+- Optionally, running containers of configured agent images that are not
+  selected targets, as `agent.instance.discovered` with unknown provenance.
 
 No prompts, invoice contents, application logs, healthcheck output, environment
 values or arbitrary Docker labels are written to SAGA's status/history. Docker
@@ -130,6 +132,31 @@ prints a single observation, then exits; it is not ongoing monitoring. It exits
 2 if a selected container is missing/unreachable or its requested stats failed.
 An unhealthy container can be successfully observed: examine `health` and
 `state` rather than treating exit 0 as an application health certificate.
+
+## Discover unattributed agent containers
+
+A configured agent image turns a running container of that image into
+evidence of an agent instance. When it is not one of the selected targets,
+SAGA records `agent.instance.discovered` once per container and session, with
+provenance `unknown` and trust `observed`:
+
+```yaml
+agent_images:
+  - image: ghcr.io/acme/booking-agent
+    runtime_type: agent
+  - image: vllm/vllm-openai
+    runtime_type: model-server
+```
+
+`runtime_type` is `agent`, `worker`, `model-server` or `inference-endpoint`.
+Configure at most 16 images by plain reference; the match uses Docker's
+`ancestor` filter. Status shows the containers under `discovered_agents`.
+
+Discovery stays observation-only. It never stops, pauses, restarts or removes a
+container, and a discovered container is not adopted as a target. An image
+name is a configured hint, not proof of identity; review the container and
+add it as a target by full ID when it is expected. See
+[docs/authority.md](authority.md) for provenance and replication.
 
 ## Run continuously
 

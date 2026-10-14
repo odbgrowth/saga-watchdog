@@ -97,7 +97,9 @@ func (e Event) Sanitized() Event {
 	e.Severity = safe(e.Severity, 32)
 	e.RuleID = safe(e.RuleID, 128)
 	var metadata map[string]any
-	for _, key := range []string{"reason", "branch", "exit_code", "count", "policy_action", "decision", "mode", "enforced", "duration_ms", "signal", "would_action", "producer", "tool_name", "agent_id", "agent_type", "tool_use_id", "session_id", "operation"} {
+	for _, key := range []string{"reason", "branch", "exit_code", "count", "policy_action", "decision", "mode", "enforced", "duration_ms", "signal", "would_action", "producer", "tool_name", "agent_id", "agent_type", "tool_use_id", "session_id", "operation",
+		"trust", "context_id", "operator_id", "authorization_context_id", "instance_id", "child_instance_id", "parent_instance_id", "host_id", "remote", "runtime_type", "provenance", "authorized_by_rule", "artifact_id", "image",
+		"restriction_id", "original_event_id", "original_run_id", "correlation", "attempts", "effect", "who"} {
 		value, ok := e.Metadata[key]
 		if !ok {
 			continue

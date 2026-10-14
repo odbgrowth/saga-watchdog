@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -18,6 +20,10 @@ type Decision struct {
 	RuleID   string `json:"rule_id,omitempty"`
 	Reason   string `json:"reason,omitempty"`
 	Severity string `json:"severity"`
+	// Authorization names the trusted policy entry that authorized a new
+	// agent instance or runtime, such as replication.allow_agents. It is
+	// provenance, kept even when escalation raises the action.
+	Authorization string `json:"authorization,omitempty"`
 }
 
 type observation struct {
@@ -39,6 +45,9 @@ type Engine struct {
 	// shellCounted records that the shell follow-up for the latest genuine
 	// denial has been counted; only a new denial makes the shell count again.
 	shellCounted bool
+	// workers counts same-host worker instances this run started and has not
+	// reported stopped, bounded by replication.same_host_workers.
+	workers int
 }
 
 // maxGrants bounds operator grants for one run. With targets bounded by the
@@ -57,6 +66,14 @@ func New(cfg config.Config, root string, controls ...string) *Engine {
 	cfg.Network.Allow = append([]string(nil), cfg.Network.Allow...)
 	cfg.Tools.Deny = append([]string(nil), cfg.Tools.Deny...)
 	cfg.Tools.Allow = append([]string(nil), cfg.Tools.Allow...)
+	cfg.Replication.AllowAgents = append([]string(nil), cfg.Replication.AllowAgents...)
+	cfg.Replication.InferenceEndpoints = append([]string(nil), cfg.Replication.InferenceEndpoints...)
+	cfg.Replication.RemoteHosts = append([]string(nil), cfg.Replication.RemoteHosts...)
+	effects := make(map[string][]string, len(cfg.Effects))
+	for name, patterns := range cfg.Effects {
+		effects[name] = append([]string(nil), patterns...)
+	}
+	cfg.Effects = effects
 	return &Engine{cfg: cfg, root: root, controls: append([]string(nil), controls...), grants: map[string]struct{}{}}
 }
 
@@ -108,6 +125,9 @@ func hostListed(entries []string, host string) bool {
 	}
 	return false
 }
+
+// Decide builds a decision with the severity that belongs to its action.
+func Decide(action, rule, reason string) Decision { return decide(action, rule, reason) }
 
 func decide(action, rule, reason string) Decision {
 	severity := map[string]string{"allow": "info", "warn": "warning", "pause": "high", "kill": "critical"}[action]
@@ -177,6 +197,17 @@ func (e *Engine) Evaluate(ev event.Event) Decision {
 			}
 		}
 	}
+	if Expansion(ev.Type) {
+		base = e.replication(ev)
+		if base.RuleID == "unauthorized-agent-replication" && len(e.denials) > 0 {
+			// Replication right after a denial is the route around it.
+			base = decide("kill", base.RuleID, base.Reason+"; attempted after a denial in this run")
+		}
+	} else if ev.Type == "authority" {
+		// No event can clear, reset or approve security state. An attempt from
+		// inside a run is itself a security event.
+		base = decide("pause", "authority-self-clear", "security history can only be cleared by an operator outside the run")
+	}
 	if base.Action == "kill" {
 		return base
 	}
@@ -186,6 +217,7 @@ func (e *Engine) Evaluate(ev event.Event) Decision {
 	}
 	escalation := e.escalate(ev, now, denied)
 	if rank(escalation.Action) > rank(base.Action) || (base.RuleID == "" && escalation.RuleID != "") {
+		escalation.Authorization = base.Authorization
 		return escalation
 	}
 	return base
@@ -291,7 +323,9 @@ func (e *Engine) escalate(ev event.Event, now time.Time, denied bool) Decision {
 			}
 		}
 		switch {
-		case ev.Type == "credential" || ev.Type == "tool":
+		case ev.Type == "credential" || ev.Type == "tool" || Expansion(ev.Type):
+			// A new agent instance, runtime or host after a denial is an
+			// alternative route as well.
 			count = !repeated
 		case ev.Type == "network" || ev.Type == "git":
 			count = related && !repeated
@@ -350,6 +384,138 @@ func appendBounded(items []observation, item observation, limit int) []observati
 		return items
 	}
 	return append(items, item)
+}
+
+// Expansion reports the event types that create or reach another agent
+// instance, runtime or host.
+func Expansion(typeID string) bool {
+	return typeID == "agent" || typeID == "runtime" || typeID == "inference" || typeID == "remote"
+}
+
+// persistable are the rules whose denials outlive a run when persistent
+// authority correlation is enabled: each denies a concrete target or effect.
+// Derived rules (failure-escalation, run-paused, authority-expansion-after-
+// denial) and run lifecycle rules are not restrictions in their own right.
+var persistable = map[string]bool{
+	"network-denied": true, "network-unlisted": true, "network-redirector": true,
+	"tool-denied": true, "tool-unlisted": true,
+	"protected-path": true, "unsafe-path": true, "protected-branch": true,
+	"git-security-modification": true, "ci-workflow-modification": true, "agent-config-modification": true,
+	"hook-tamper": true, "policy-tamper": true,
+	"unauthorized-agent-replication": true, "cross-host-authority-expansion": true, "authority-self-clear": true,
+}
+
+// Persistable reports whether a pause or kill decision becomes a restriction
+// that survives the run.
+func Persistable(d Decision) bool {
+	return (d.Action == "pause" || d.Action == "kill") && persistable[d.RuleID]
+}
+
+// NetworkHost normalizes a host, host:port or URL target to its lowercase host.
+func NetworkHost(target string) string { return networkHost(target) }
+
+// Stronger returns the decision with the higher intervention; a tie keeps a.
+func Stronger(a, b Decision) Decision {
+	if rank(b.Action) > rank(a.Action) {
+		return b
+	}
+	return a
+}
+
+// replication decides events that create, discover or stop agent instances,
+// runtimes and inference endpoints, or execute on another host. Nothing is
+// authorized unless trusted policy lists it: authority does not replicate.
+// runtime_type, host_id and remote come from the supervisor's normalization
+// of the reported event; they can only narrow what policy allows.
+func (e *Engine) replication(ev event.Event) Decision {
+	host, _ := ev.Metadata["host_id"].(string)
+	remote, _ := ev.Metadata["remote"].(bool)
+	runtimeType, _ := ev.Metadata["runtime_type"].(string)
+	r := e.cfg.Replication
+	hostAllowed := slices.Contains(r.RemoteHosts, host)
+	listed := func(patterns []string) bool {
+		for _, p := range patterns {
+			if Match(p, ev.Target) {
+				return true
+			}
+		}
+		return false
+	}
+	switch ev.Type + "." + ev.Action {
+	case "agent.instance.stop":
+		if runtimeType == "worker" && e.workers > 0 {
+			e.workers--
+		}
+		return decide("allow", "", "")
+	case "agent.instance.discovered", "inference.endpoint.discovered":
+		if listed(r.AllowAgents) || slices.Contains(r.InferenceEndpoints, ev.Target) {
+			return decide("allow", "", "")
+		}
+		return decide("warn", "unattributed-agent-instance", "agent instance or endpoint discovered without known provenance; it holds no authority from this run")
+	case "remote.execution.attempt":
+		if !remote {
+			return decide("allow", "", "")
+		}
+		if hostAllowed {
+			return Decision{Action: "allow", Authorization: "replication.remote_hosts", Severity: "info", Reason: "remote host authorized by replication.remote_hosts"}
+		}
+		return decide("pause", "cross-host-authority-expansion", "execution on host "+host+" is not authorized by replication.remote_hosts")
+	}
+	// Everything else creates a runtime: agent.instance.start,
+	// agent.replication.attempt, runtime.deploy|copy|start,
+	// inference.endpoint.start.
+	if remote {
+		if hostAllowed {
+			return Decision{Action: "allow", Authorization: "replication.remote_hosts", Severity: "info", Reason: "remote host authorized by replication.remote_hosts"}
+		}
+		return decide("kill", "cross-host-authority-expansion", "agent runtime created on host "+host+" without authorization; cross-host execution is a privileged effect")
+	}
+	if ev.Type == "inference" {
+		if slices.Contains(r.InferenceEndpoints, ev.Target) {
+			return Decision{Action: "allow", Authorization: "replication.inference_endpoints", Severity: "info", Reason: "endpoint authorized by replication.inference_endpoints"}
+		}
+		return decide("pause", "unauthorized-agent-replication", "inference endpoint "+ev.Target+" is not listed in replication.inference_endpoints")
+	}
+	if runtimeType == "worker" && e.workers < r.SameHostWorkers {
+		e.workers++
+		return Decision{Action: "allow", Authorization: "replication.same_host_workers", Severity: "info", Reason: fmt.Sprintf("worker %d of %d authorized by replication.same_host_workers", e.workers, r.SameHostWorkers)}
+	}
+	if listed(r.AllowAgents) {
+		return Decision{Action: "allow", Authorization: "replication.allow_agents", Severity: "info", Reason: "runtime authorized by replication.allow_agents"}
+	}
+	return decide("pause", "unauthorized-agent-replication", "starting another autonomous runtime ("+ev.Target+") is not authorized by replication policy")
+}
+
+// Effects returns the named effects an event reaches, sorted. Effects are
+// declared by trusted policy; they group targets that achieve the same
+// restricted outcome, such as several deployment APIs.
+func (e *Engine) Effects(ev event.Event) []string {
+	target := ev.Target
+	switch ev.Type {
+	case "network":
+		target = networkHost(target)
+	case "file":
+		normalized, err := normalize(e.root, target, false)
+		if err != nil {
+			return nil
+		}
+		target = normalized
+	}
+	var names []string
+	for name, patterns := range e.cfg.Effects {
+		for _, entry := range patterns {
+			typ, pattern, _ := strings.Cut(entry, ":")
+			if typ != ev.Type {
+				continue
+			}
+			if (typ == "network" && hostListed([]string{pattern}, target)) || (typ != "network" && Match(pattern, target)) {
+				names = append(names, name)
+				break
+			}
+		}
+	}
+	sort.Strings(names)
+	return names
 }
 
 func rank(action string) int {

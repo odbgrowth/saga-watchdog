@@ -225,3 +225,37 @@ func TestLineageFieldsAreBoundedIdentifiers(t *testing.T) {
 		})
 	}
 }
+
+// Tests 7 and 20: a self-reported authorization context, identity or
+// approval has no field to travel in and is rejected.
+func TestExpansionEventsAndSelfReportedAuthorityClaims(t *testing.T) {
+	for _, input := range []string{
+		`{"operation":"check","event":{"type":"agent","action":"instance.start","target":"codex","runtime_type":"agent"}}`,
+		`{"operation":"check","event":{"type":"inference","action":"endpoint.start","target":"0.0.0.0:8000"}}`,
+		`{"operation":"check","event":{"type":"remote","action":"execution.attempt","target":"deploy-agent","host":"build-02"}}`,
+		`{"operation":"emit","event":{"type":"runtime","action":"copy","target":"bundle","result":"success"}}`,
+		`{"operation":"check","event":{"type":"authority","action":"clear","target":"persistent-state"}}`,
+	} {
+		if _, err := Decode([]byte(input), false); err != nil {
+			t.Errorf("%s: %v", input, err)
+		}
+	}
+	for _, input := range []string{
+		// An agent cannot name its own identity, context or provenance: the
+		// protocol has no such fields.
+		`{"operation":"check","event":{"type":"tool","action":"call","target":"x","authorization_context":"production-admin"}}`,
+		`{"operation":"check","event":{"type":"agent","action":"instance.start","target":"b","provenance":"trusted"}}`,
+		`{"operation":"check","event":{"type":"tool","action":"call","target":"x","operator_id":"human:onno"}}`,
+		`{"operation":"clear","event":{"type":"authority","action":"clear","target":"persistent-state"}}`,
+		`{"operation":"check","event":{"type":"agent","action":"approve","target":"b"}}`,
+		`{"operation":"check","event":{"type":"agent","action":"instance.start","target":"b","runtime_type":"root"}}`,
+		`{"operation":"check","event":{"type":"remote","action":"execution.attempt","target":"b","host":"bad host"}}`,
+	} {
+		if _, err := Decode([]byte(input), false); err == nil {
+			t.Errorf("accepted %s", input)
+		}
+	}
+	if _, err := Decode([]byte(`{"operation":"grant","event":{"type":"network","target":"x.example","host":"h"}}`), true); err == nil {
+		t.Error("grant accepted a host field")
+	}
+}

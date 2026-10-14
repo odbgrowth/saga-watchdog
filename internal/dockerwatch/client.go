@@ -177,6 +177,25 @@ func (c *Client) Stats(ctx context.Context, api, id string) (Stats, error) {
 	return s, err
 }
 
+// ContainersOfImage lists the full IDs of running containers created from an
+// image (Docker's ancestor filter). It is a read; nothing is changed.
+func (c *Client) ContainersOfImage(ctx context.Context, api, image string) ([]string, error) {
+	filter, _ := json.Marshal(map[string][]string{"ancestor": {image}, "status": {"running"}})
+	var list []struct {
+		ID string `json:"Id"`
+	}
+	if err := c.read(ctx, api+"/containers/json?"+url.Values{"filters": {string(filter)}}.Encode(), &list); err != nil {
+		return nil, err
+	}
+	var ids []string
+	for _, item := range list {
+		if fullID.MatchString(item.ID) && len(ids) < 256 {
+			ids = append(ids, item.ID)
+		}
+	}
+	return ids, nil
+}
+
 type DockerEvent struct {
 	Type   string `json:"Type"`
 	Action string `json:"Action"`

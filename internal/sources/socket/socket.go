@@ -13,10 +13,12 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/odbgrowth/saga-watchdog/internal/authority"
 	"github.com/odbgrowth/saga-watchdog/internal/policy"
 	"github.com/odbgrowth/saga-watchdog/internal/store"
 )
@@ -35,7 +37,25 @@ type Input struct {
 	AgentType string `json:"agent_type,omitempty"`
 	CallID    string `json:"call_id,omitempty"`
 	SessionID string `json:"session_id,omitempty"`
+	// Host and RuntimeType describe agent, runtime, inference and remote
+	// events: where a runtime runs and what kind it is. They are claims that
+	// can only narrow what replication policy allows.
+	Host        string `json:"host,omitempty"`
+	RuntimeType string `json:"runtime_type,omitempty"`
 }
+
+// expansionActions are the supported actions of agent, runtime, inference and
+// remote events.
+var expansionActions = map[string][]string{
+	"agent":     {"instance.start", "instance.stop", "instance.discovered", "replication.attempt"},
+	"runtime":   {"deploy", "copy", "start"},
+	"inference": {"endpoint.start", "endpoint.discovered"},
+	"remote":    {"execution.attempt"},
+}
+
+// RuntimeTypes are the supported runtime kinds; empty means the default for
+// the event type.
+var RuntimeTypes = []string{"", "agent", "worker", "model-server", "inference-endpoint"}
 
 // Lineage maps the non-empty optional fields to their audit metadata keys.
 func (i Input) Lineage() map[string]string {
@@ -58,6 +78,9 @@ type Response struct {
 	Decision *policy.Decision `json:"decision,omitempty"`
 	Run      *store.Run       `json:"run,omitempty"`
 	Error    string           `json:"error,omitempty"`
+	// Instance is the provenance a supervisor assigned to a new agent instance
+	// it authorized. A nested run adopts it; it carries no grants.
+	Instance *authority.Instance `json:"instance,omitempty"`
 }
 type Call struct {
 	Request Request
@@ -90,7 +113,7 @@ func Validate(r Request, controls bool) error {
 			if r.Event.Target == "" || len(r.Event.Target) > 253 || strings.ContainsAny(r.Event.Target, "\x00\r\n") {
 				return errors.New("grant requires a target of at most 253 bytes without control characters")
 			}
-			if r.Event.Action != "" || r.Event.Result != "" || len(r.Event.Lineage()) != 0 {
+			if r.Event.Action != "" || r.Event.Result != "" || len(r.Event.Lineage()) != 0 || r.Event.Host != "" || r.Event.RuntimeType != "" {
 				return errors.New("grant carries only a type and a target")
 			}
 		default:
@@ -102,9 +125,19 @@ func Validate(r Request, controls bool) error {
 		return errors.New("events endpoint accepts only check and emit")
 	}
 	switch r.Event.Type {
-	case "file", "network", "credential", "tool", "policy", "git", "process":
+	case "file", "network", "credential", "tool", "policy", "git", "process", "authority":
+	case "agent", "runtime", "inference", "remote":
+		if !slices.Contains(expansionActions[r.Event.Type], r.Event.Action) {
+			return fmt.Errorf("%s events support actions %s", r.Event.Type, strings.Join(expansionActions[r.Event.Type], ", "))
+		}
 	default:
 		return errors.New("invalid event type")
+	}
+	if !slices.Contains(RuntimeTypes, r.Event.RuntimeType) {
+		return errors.New("runtime_type must be agent, worker, model-server or inference-endpoint")
+	}
+	if len(r.Event.Host) > 253 || strings.ContainsFunc(r.Event.Host, func(c rune) bool { return c < 0x21 || c > 0x7e }) {
+		return errors.New("host must be at most 253 printable ASCII bytes without spaces")
 	}
 	if r.Event.Action == "" || len(r.Event.Action) > 64 || len(r.Event.Target) > 4096 || r.Event.Target == "" {
 		return errors.New("action and target are required and must fit their limits")

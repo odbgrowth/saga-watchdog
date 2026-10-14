@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -48,6 +49,9 @@ type Snapshot struct {
 	EventStream string         `json:"event_stream"`
 	StreamError string         `json:"stream_error,omitempty"`
 	Targets     []TargetStatus `json:"targets"`
+	// Discovered lists agent-image containers that are not selected targets.
+	// They have unknown provenance and are observed, never controlled.
+	Discovered []string `json:"discovered_agents,omitempty"`
 }
 
 // Freshness is computed by readers, so a crashed observer cannot leave an
@@ -253,11 +257,54 @@ func Run(ctx context.Context, cfg Config, client *Client, once bool) (err error)
 		err = errors.Join(err, audit("observer-stop", "observer", s.Observer, "info", "selected containers were not modified"), save())
 	}()
 	var previous = make([]*resourceSample, len(cfg.Targets))
+	selected := make(map[string]bool, len(cfg.Targets))
+	for _, t := range cfg.Targets {
+		selected[t.ID] = true
+	}
+	discoveryError := ""
+	// discover reports running containers of configured agent images that
+	// nobody selected. A new autonomous workload is a separate security
+	// effect; the observer records it and changes nothing.
+	discover := func() error {
+		if len(cfg.AgentImages) == 0 {
+			return nil
+		}
+		api, err := client.Version(ctx)
+		if err != nil {
+			return nil // poll already reports the unavailable daemon
+		}
+		for _, img := range cfg.AgentImages {
+			ids, err := client.ContainersOfImage(ctx, api, img.Image)
+			if err != nil {
+				if reason := safeError(err); reason != discoveryError {
+					discoveryError = reason
+					if err := audit("agent-discovery", img.Image, "unknown", "warning", reason); err != nil {
+						return err
+					}
+				}
+				continue
+			}
+			for _, id := range ids {
+				if selected[id] || slices.Contains(s.Discovered, id) || len(s.Discovered) >= 64 {
+					continue
+				}
+				s.Discovered = append(s.Discovered, id)
+				if err := j.Append(event.Event{ID: event.NewID("evt"), Timestamp: time.Now().UTC(), RunID: s.SessionID, Source: "docker", Type: "agent", Action: "instance.discovered", Target: id, Result: "observed", Severity: "warning",
+					Metadata: map[string]any{"reason": "running container of a configured agent image is not a selected target; provenance unknown, lifecycle unchanged", "image": img.Image, "runtime_type": img.RuntimeType, "provenance": "unknown", "trust": "observed", "mode": "observe", "enforced": false}}); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
 	refresh := func() error {
 		var next []TargetStatus
 		next, previous = poll(ctx, client, cfg.Targets, previous)
 		if ctx.Err() != nil {
 			return nil
+		}
+		if err := discover(); err != nil {
+			return err
 		}
 		for n, t := range next {
 			if signature(t) != signature(s.Targets[n]) {

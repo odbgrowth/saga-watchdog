@@ -88,11 +88,16 @@ escalation scenarios.
 | `kill <run-id>` | Stop an owned run with graceful/forced termination. |
 | `grant [--run ID] network <host>` or `tool <server/tool>` | Authorize one unlisted host or tool for the rest of a run (allowlist modes). |
 | `report [--run ID] [--json]` | Summarize a run from its audit log. |
+| `authority status` | Show the security context and its unresolved restrictions. |
+| `authority history` | Show the context's restriction audit log, across runs and sessions. |
+| `authority clear --id ID \| --all --reason TEXT` | Operator-only: resolve restrictions, with an audited reason. |
 | `check` | Ask the running supervisor for a pre-action decision. |
 | `emit` | Submit a post-action observation to the running supervisor. |
 | `version` | Print the binary version. |
 
-`check` and `emit` also accept `--run ID` to address a project run explicitly.
+`check` and `emit` also accept `--run ID` to address a project run explicitly,
+and `--host` and `--runtime-type` for agent, runtime, inference and remote
+events. See [Authority across runs, sessions and agent instances](authority.md).
 Control commands take the run ID positionally; flags belong to their command,
 not before the command name. Coding-agent commands load `.saga-watchdog.yaml`
 from the Git project root; Docker mode has its own `--config` option.
@@ -157,7 +162,29 @@ tools:
   mode: denylist
   allow: []
   deny: [github/delete_repository, 'payments/*']
+security_context:
+  authorization_context: dev-local
+  retention: 24h
+  serious_retention: 168h
+effects:
+  production_deploy:
+    - network:deploy.example.com
+    - tool:vercel/deploy
+replication:
+  same_host_workers: 0
+  allow_agents: []
+  inference_endpoints: []
+  remote_hosts: []
 ```
+
+`security_context`, `effects` and `replication` are optional. With an
+operator identity (`SAGA_WATCHDOG_OPERATOR`) and an authorization context,
+enforced restrictions persist across runs and model sessions of the same
+operator, project and authorization context. `effects` names what a target
+achieves, so an alternate route to the same effect is recognized after a
+denial. `replication` lists the agent instances, inference endpoints and
+remote hosts the policy authorizes; everything else is denied. Read
+[docs/authority.md](authority.md) before relying on them.
 
 `network.deny` is an optional exact-hostname deny list, empty by default.
 Hostnames are normalized from host or URL targets. It governs integration
@@ -312,6 +339,13 @@ plain-language reason.
 
 Events are only as complete as the sources providing them. Core mode cannot
 notice unreported network or credential attempts.
+
+The window above is per run. With a complete security context, enforced
+restrictions also survive the run: a retry of a denied target, an alternate
+route to the same declared effect, or an agent, runtime or remote expansion
+while a restriction is unresolved continues the earlier trajectory
+(`authority-expansion-after-denial`), even in a new model session. See
+[docs/authority.md](authority.md).
 
 ## Running Codex
 
@@ -526,7 +560,14 @@ errors. Use `allowed` or the CLI exit status to decide whether to proceed.
 An event may also carry optional bounded identifiers, each at most 128
 printable ASCII bytes without spaces: `producer`, `tool`, `agent_id`,
 `agent_type`, `call_id` and `session_id`. They are recorded as metadata for
-correlation only. Any other field is rejected.
+correlation only. Agent, runtime, inference and remote events may add `host`
+and `runtime_type`. Any other field is rejected.
+
+Every recorded event carries a `trust` label: `observed` for Watchdog's own
+evidence, `trusted-integration` for a configured hook producer, and
+`self-reported` for anything else. A self-reported identifier is a claim, not
+an identity. A self-reported agent, runtime, inference or remote event, or a
+cross-run correlation based on one, can at most pause a run on its own.
 
 These are two independent example connections, not a policy update protocol.
 The supervisor assigns decisions and severity. Clients cannot supply policy

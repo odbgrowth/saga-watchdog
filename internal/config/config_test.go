@@ -124,3 +124,41 @@ func TestShellFollowUpAndRedirectorDefaults(t *testing.T) {
 		t.Fatalf("overrides not parsed: %+v %v", c, err)
 	}
 }
+
+func TestSecurityContextEffectsAndReplication(t *testing.T) {
+	base := "version: 1\nprofile: coding-agent\nmode: enforce\n"
+	c, err := Parse(strings.NewReader(base + "security_context:\n  authorization_context: dev-local\n  retention: 12h\neffects:\n  production.deploy: ['network:deploy.example.com', 'network:.vercel.com', 'tool:vercel/*']\nreplication:\n  same_host_workers: 2\n  allow_agents: [claude]\n  inference_endpoints: ['127.0.0.1:8000']\n  remote_hosts: [build-01]\n"))
+	if err != nil || c.SecurityContext.AuthorizationContext != "dev-local" || c.SecurityContext.Retention != 12*time.Hour || c.SecurityContext.SeriousRetention != 7*24*time.Hour || len(c.Effects["production.deploy"]) != 3 || c.Replication.SameHostWorkers != 2 {
+		t.Fatalf("%+v %v", c, err)
+	}
+	d := Default()
+	if d.SecurityContext.AuthorizationContext != "" || d.Replication.SameHostWorkers != 0 || len(d.Replication.AllowAgents) != 0 || len(d.Effects) != 0 {
+		t.Fatalf("defaults must keep persistence off and replication closed: %+v", d)
+	}
+	for _, bad := range []string{
+		"security_context:\n  authorization_context: Dev Local\n",
+		"security_context:\n  retention: 10s\n",
+		"security_context:\n  retention: 48h\n  serious_retention: 24h\n",
+		"effects:\n  deploy: ['shell:rm']\n",
+		"effects:\n  deploy: ['network:*.example.com']\n",
+		"effects:\n  Deploy: ['tool:x']\n",
+		"effects:\n  deploy: []\n",
+		"replication:\n  same_host_workers: -1\n",
+		"replication:\n  remote_hosts: ['host with space']\n",
+		"replication:\n  allow_agents: ['/abs']\n",
+	} {
+		if _, err := Parse(strings.NewReader(base + bad)); err == nil {
+			t.Errorf("accepted %q", bad)
+		}
+	}
+	for _, op := range []string{"human:onno", "service:ci-bot", "human:onno@example.com"} {
+		if !OperatorID.MatchString(op) {
+			t.Errorf("rejected %s", op)
+		}
+	}
+	for _, op := range []string{"onno", "human:", "human:on no", "HUMAN:onno"} {
+		if OperatorID.MatchString(op) {
+			t.Errorf("accepted %s", op)
+		}
+	}
+}

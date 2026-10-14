@@ -15,31 +15,37 @@ import (
 	"strings"
 	"time"
 
+	"github.com/odbgrowth/saga-watchdog/internal/authority"
 	"github.com/odbgrowth/saga-watchdog/internal/event"
 )
 
 type Run struct {
-	ID         string     `json:"id"`
-	Project    string     `json:"project"`
-	Agent      string     `json:"agent"`
-	Status     string     `json:"status"`
-	Mode       string     `json:"mode"`
-	Branch     string     `json:"branch"`
-	PolicyHash string     `json:"policy_hash"`
-	Controls   []string   `json:"controls,omitempty"`
-	Grants     []string   `json:"grants,omitempty"`
-	Socket     string     `json:"socket"`
-	Control    string     `json:"control"`
-	Started    time.Time  `json:"started"`
-	Finished   *time.Time `json:"finished,omitempty"`
-	Events     int        `json:"events"`
-	Warnings   int        `json:"warnings"`
-	Pauses     int        `json:"pauses"`
-	Kills      int        `json:"kills"`
-	Violations int        `json:"violations"`
-	ExitCode   int        `json:"exit_code"`
-	Rule       string     `json:"rule,omitempty"`
-	Reason     string     `json:"reason,omitempty"`
+	ID         string   `json:"id"`
+	Project    string   `json:"project"`
+	Agent      string   `json:"agent"`
+	Status     string   `json:"status"`
+	Mode       string   `json:"mode"`
+	Branch     string   `json:"branch"`
+	PolicyHash string   `json:"policy_hash"`
+	Controls   []string `json:"controls,omitempty"`
+	Grants     []string `json:"grants,omitempty"`
+	// Instance is this run's agent instance and its provenance. Context is
+	// the trusted security context, or why persistent correlation is off.
+	Instance        *authority.Instance `json:"instance,omitempty"`
+	ContextID       string              `json:"context_id,omitempty"`
+	ContextDisabled string              `json:"context_disabled,omitempty"`
+	Socket          string              `json:"socket"`
+	Control         string              `json:"control"`
+	Started         time.Time           `json:"started"`
+	Finished        *time.Time          `json:"finished,omitempty"`
+	Events          int                 `json:"events"`
+	Warnings        int                 `json:"warnings"`
+	Pauses          int                 `json:"pauses"`
+	Kills           int                 `json:"kills"`
+	Violations      int                 `json:"violations"`
+	ExitCode        int                 `json:"exit_code"`
+	Rule            string              `json:"rule,omitempty"`
+	Reason          string              `json:"reason,omitempty"`
 }
 
 type Store struct {
@@ -84,6 +90,16 @@ func ProjectDir(root string) (string, error) {
 	}
 	h := sha256.Sum256([]byte(root))
 	return filepath.Join(base, hex.EncodeToString(h[:8])), nil
+}
+
+// ProjectID is the Watchdog-derived identity of a project: a hash of its
+// canonical root. It is the project component of a security context.
+func ProjectID(root string) (string, error) {
+	dir, err := ProjectDir(root)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Base(dir), nil
 }
 
 func privateDir(dir string) error {

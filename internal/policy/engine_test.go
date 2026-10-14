@@ -347,3 +347,89 @@ func TestShellFollowUpAndRedirectors(t *testing.T) {
 		t.Fatalf("deny must win over allow: %+v", d)
 	}
 }
+
+func TestReplicationRules(t *testing.T) {
+	cfg := config.Default()
+	cfg.Replication = config.Replication{SameHostWorkers: 1, AllowAgents: []string{"claude"}, InferenceEndpoints: []string{"127.0.0.1:8000"}, RemoteHosts: []string{"build-01"}}
+	ev := func(typ, action, target, host string, remote bool, runtimeType string) event.Event {
+		return event.Event{Timestamp: epoch, Type: typ, Action: action, Target: target, Metadata: map[string]any{"host_id": host, "remote": remote, "runtime_type": runtimeType}}
+	}
+	for name, tc := range map[string]struct {
+		ev           event.Event
+		action, rule string
+	}{
+		"authorized same-host worker":    {ev("agent", "instance.start", "test-runner", "host_l", false, "worker"), "allow", "replication.same_host_workers"},
+		"unauthorized autonomous agent":  {ev("agent", "instance.start", "codex", "host_l", false, "agent"), "pause", "unauthorized-agent-replication"},
+		"listed agent":                   {ev("agent", "replication.attempt", "claude", "host_l", false, "agent"), "allow", "replication.allow_agents"},
+		"unauthorized model server":      {ev("inference", "endpoint.start", "0.0.0.0:8000", "host_l", false, "inference-endpoint"), "pause", "unauthorized-agent-replication"},
+		"allowed inference endpoint":     {ev("inference", "endpoint.start", "127.0.0.1:8000", "host_l", false, "inference-endpoint"), "allow", "replication.inference_endpoints"},
+		"runtime copy is replication":    {ev("runtime", "copy", "agent-bundle", "host_l", false, "agent"), "pause", "unauthorized-agent-replication"},
+		"remote execution unauthorized":  {ev("remote", "execution.attempt", "deploy-agent", "build-02", true, "agent"), "pause", "cross-host-authority-expansion"},
+		"remote execution authorized":    {ev("remote", "execution.attempt", "deploy-agent", "build-01", true, "agent"), "allow", "replication.remote_hosts"},
+		"agent started on another host":  {ev("runtime", "start", "codex", "build-02", true, "agent"), "kill", "cross-host-authority-expansion"},
+		"agent on an authorized host":    {ev("agent", "instance.start", "codex", "build-01", true, "agent"), "allow", "replication.remote_hosts"},
+		"unattributed discovered agent":  {ev("agent", "instance.discovered", "rogue", "host_l", false, "agent"), "warn", "unattributed-agent-instance"},
+		"local remote.execution is noop": {ev("remote", "execution.attempt", "x", "host_l", false, "agent"), "allow", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := New(cfg, t.TempDir()).Evaluate(tc.ev)
+			got := d.RuleID
+			if strings.HasPrefix(tc.rule, "replication.") {
+				got = d.Authorization
+			}
+			if d.Action != tc.action || got != tc.rule {
+				t.Fatalf("%+v", d)
+			}
+		})
+	}
+	// Remote network traffic alone is not replication.
+	if d := New(cfg, t.TempDir()).Evaluate(event.Event{Timestamp: epoch, Type: "network", Action: "connect", Target: "build-02"}); d.Action != "allow" {
+		t.Fatalf("network connection treated as replication: %+v", d)
+	}
+	// The worker budget is per run; a stop frees a slot.
+	e := New(cfg, t.TempDir())
+	worker := ev("agent", "instance.start", "test-runner", "host_l", false, "worker")
+	if first := e.Evaluate(worker); first.Action != "allow" || first.Authorization != "replication.same_host_workers" || e.Evaluate(worker).RuleID != "unauthorized-agent-replication" {
+		t.Fatal("worker budget not enforced")
+	}
+	e = New(cfg, t.TempDir())
+	e.Evaluate(worker)
+	e.Evaluate(ev("agent", "instance.stop", "test-runner", "host_l", false, "worker"))
+	if d := e.Evaluate(worker); d.Action != "allow" {
+		t.Fatalf("stopped worker slot not freed: %+v", d)
+	}
+	// Unauthorized replication right after a denial is the bypass: kill.
+	cfg.Network.Deny = []string{"prod.example.com"}
+	e = New(cfg, t.TempDir())
+	e.Evaluate(event.Event{Timestamp: epoch, Type: "network", Action: "connect", Target: "prod.example.com"})
+	if d := e.Evaluate(ev("agent", "instance.start", "codex", "host_l", false, "agent")); d.Action != "kill" || d.RuleID != "unauthorized-agent-replication" {
+		t.Fatalf("replication after denial: %+v", d)
+	}
+}
+
+func TestEffectsAndSelfClear(t *testing.T) {
+	cfg := config.Default()
+	cfg.Effects = map[string][]string{"production.deploy": {"network:deploy.example.com", "network:.vercel.com", "tool:vercel/*"}, "secrets.read": {"file:secrets/**"}}
+	e := New(cfg, t.TempDir())
+	for target, want := range map[string]string{"https://deploy.example.com/v1": "production.deploy", "api.vercel.com": "production.deploy", "pypi.org": ""} {
+		got := e.Effects(event.Event{Type: "network", Target: target})
+		if (want == "" && len(got) != 0) || (want != "" && (len(got) != 1 || got[0] != want)) {
+			t.Errorf("%s: %v", target, got)
+		}
+	}
+	if got := e.Effects(event.Event{Type: "tool", Target: "vercel/deploy"}); len(got) != 1 {
+		t.Fatalf("tool effect: %v", got)
+	}
+	if got := e.Effects(event.Event{Type: "file", Target: "secrets/prod/key.txt"}); len(got) != 1 || got[0] != "secrets.read" {
+		t.Fatalf("file effect: %v", got)
+	}
+	// No event can clear or approve security state.
+	for _, action := range []string{"clear", "reset", "approve"} {
+		if d := e.Evaluate(event.Event{Timestamp: epoch, Type: "authority", Action: action, Target: "persistent-state"}); d.Action != "pause" || d.RuleID != "authority-self-clear" || !Persistable(d) {
+			t.Fatalf("%s: %+v", action, d)
+		}
+	}
+	if Persistable(Decision{Action: "pause", RuleID: "failure-escalation"}) || Persistable(Decision{Action: "warn", RuleID: "network-denied"}) {
+		t.Fatal("derived or warning decisions must not persist")
+	}
+}

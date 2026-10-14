@@ -273,3 +273,66 @@ func TestStatusCannotRemainFreshAfterCrash(t *testing.T) {
 		t.Fatal(s)
 	}
 }
+
+// Tests 22-24: only containers of configured agent images that nobody
+// selected are reported, with unknown provenance, and nothing is changed.
+func TestAgentImageDiscoveryIsObservationOnly(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.AgentImages = []AgentImage{{Image: "ghcr.io/acme/agent", RuntimeType: "agent"}}
+	rogue := strings.Repeat("b", 64)
+	c := fixtureClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/version":
+			fmt.Fprint(w, `{"ApiVersion":"1.56","MinAPIVersion":"1.44"}`)
+		case "/v1.56/containers/json":
+			filter := r.URL.Query().Get("filters")
+			if !strings.Contains(filter, `"ancestor":["ghcr.io/acme/agent"]`) || !strings.Contains(filter, `"running"`) {
+				t.Errorf("unexpected filter %s", filter)
+			}
+			// The selected target, an unselected agent container and a
+			// malformed ID; unrelated images are never listed by the filter.
+			fmt.Fprintf(w, `[{"Id":%q},{"Id":%q},{"Id":"short"}]`, testID, rogue)
+		case "/v1.56/containers/" + testID + "/json":
+			fmt.Fprintf(w, `{"Id":%q,"State":{"Status":"running"}}`, testID)
+		case "/v1.56/containers/" + testID + "/stats":
+			fmt.Fprintf(w, `{"id":%q,"read":"2026-10-14T09:00:00Z","memory_stats":{"usage":1,"limit":2}}`, testID)
+		default:
+			t.Errorf("unexpected endpoint %s", r.URL.Path)
+			w.WriteHeader(404)
+		}
+	})
+	if err := Run(context.Background(), cfg, c, true); err != nil {
+		t.Fatal(err)
+	}
+	var b strings.Builder
+	if err := CopyHistory(cfg.StateDir, &b); err != nil {
+		t.Fatal(err)
+	}
+	history := b.String()
+	if strings.Count(history, `"action":"instance.discovered"`) != 1 || !strings.Contains(history, `"target":"`+rogue+`"`) || !strings.Contains(history, `"provenance":"unknown"`) || !strings.Contains(history, `"enforced":false`) {
+		t.Fatalf("discovery history: %s", history)
+	}
+	if strings.Contains(history, `"instance.discovered","target":"`+testID) {
+		t.Fatal("selected target reported as an unknown agent")
+	}
+	s, err := ReadSnapshot(cfg)
+	if err != nil || len(s.Discovered) != 1 || s.Discovered[0] != rogue {
+		t.Fatalf("snapshot: %v %+v", err, s.Discovered)
+	}
+	// Without agent_images nothing is listed at all.
+	plain := testConfig(t)
+	c = fixtureClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1.56/containers/json" {
+			t.Error("containers listed without agent_images")
+		}
+		switch r.URL.Path {
+		case "/version":
+			fmt.Fprint(w, `{"ApiVersion":"1.56"}`)
+		default:
+			fmt.Fprintf(w, `{"Id":%q,"State":{"Status":"exited"}}`, testID)
+		}
+	})
+	if err := Run(context.Background(), plain, c, true); err != nil {
+		t.Fatal(err)
+	}
+}

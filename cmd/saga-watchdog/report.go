@@ -28,6 +28,30 @@ type Report struct {
 	Coverage []Coverage     `json:"coverage"`
 	Warnings []string       `json:"warnings"`
 	Timeline []TimelineItem `json:"timeline"`
+	// Trajectory lists events that continued an earlier restriction in the
+	// same security context; Instances lists agent instances this run
+	// started or reported, with their provenance.
+	Trajectory []TrajectoryItem `json:"trajectory"`
+	Instances  []InstanceItem   `json:"instances"`
+}
+
+type TrajectoryItem struct {
+	Time          time.Time `json:"time"`
+	Decision      string    `json:"decision"`
+	Event         string    `json:"event"`
+	Correlation   string    `json:"correlation"`
+	RestrictionID string    `json:"restriction_id"`
+	OriginalRun   string    `json:"original_run_id"`
+}
+
+type InstanceItem struct {
+	Time         time.Time `json:"time"`
+	InstanceID   string    `json:"instance_id"`
+	Event        string    `json:"event"`
+	Host         string    `json:"host_id"`
+	Decision     string    `json:"decision"`
+	Provenance   string    `json:"provenance"`
+	AuthorizedBy string    `json:"authorized_by_rule,omitempty"`
 }
 
 type Counts struct {
@@ -109,6 +133,17 @@ func buildReport(dir string, r store.Run) (Report, error) {
 		}
 		rep.Counts.Events++
 		decision, _ := e.Metadata["decision"].(string)
+		if restriction, _ := e.Metadata["restriction_id"].(string); restriction != "" && len(rep.Trajectory) < maxTimelineRows {
+			correlation, _ := e.Metadata["correlation"].(string)
+			original, _ := e.Metadata["original_run_id"].(string)
+			rep.Trajectory = append(rep.Trajectory, TrajectoryItem{Time: e.Timestamp, Decision: decision, Event: e.Type + " " + e.Action + " " + e.Target, Correlation: correlation, RestrictionID: restriction, OriginalRun: original})
+		}
+		if child, _ := e.Metadata["child_instance_id"].(string); child != "" && len(rep.Instances) < maxTimelineRows {
+			host, _ := e.Metadata["host_id"].(string)
+			provenance, _ := e.Metadata["provenance"].(string)
+			by, _ := e.Metadata["authorized_by_rule"].(string)
+			rep.Instances = append(rep.Instances, InstanceItem{Time: e.Timestamp, InstanceID: child, Event: e.Type + " " + e.Action + " " + e.Target, Host: host, Decision: decision, Provenance: provenance, AuthorizedBy: by})
+		}
 		producer, _ := e.Metadata["producer"].(string)
 		tool, _ := e.Metadata["tool_name"].(string)
 		switch e.Source {
@@ -216,6 +251,12 @@ func buildReport(dir string, r store.Run) (Report, error) {
 	if rep.Warnings == nil {
 		rep.Warnings = []string{}
 	}
+	if rep.Trajectory == nil {
+		rep.Trajectory = []TrajectoryItem{}
+	}
+	if rep.Instances == nil {
+		rep.Instances = []InstanceItem{}
+	}
 	if rep.Timeline == nil {
 		rep.Timeline = []TimelineItem{}
 	}
@@ -271,6 +312,34 @@ func writeReport(w io.Writer, rep Report) {
 	}
 	for _, cv := range rep.Coverage {
 		fmt.Fprintf(w, "  %-20s checks %4d  reports %4d\n", cv.Producer, cv.Checks, cv.Reports)
+	}
+	if r.Instance != nil {
+		parent := ""
+		if r.Instance.ParentID != "" {
+			parent = ", parent " + r.Instance.ParentID
+		}
+		fmt.Fprintf(w, "\nInstance  %s (provenance %s%s, host %s)\n", r.Instance.ID, r.Instance.Provenance, parent, r.Instance.HostID)
+	}
+	if r.ContextID != "" {
+		fmt.Fprintf(w, "Context   %s (%s, %s)\n", r.ContextID, r.Instance.OperatorID, r.Instance.AuthorizationContextID)
+	} else if r.ContextDisabled != "" {
+		fmt.Fprintf(w, "Context   none (%s)\n", r.ContextDisabled)
+	}
+	if len(rep.Trajectory) > 0 {
+		fmt.Fprintln(w, "\nAuthority trajectory (continues earlier restrictions)")
+		for _, t := range rep.Trajectory {
+			fmt.Fprintf(w, "  %s  %-5s %s  [%s; restriction %s from run %s]\n", t.Time.UTC().Format("15:04:05"), t.Decision, event.Redact(t.Event), t.Correlation, t.RestrictionID, t.OriginalRun)
+		}
+	}
+	if len(rep.Instances) > 0 {
+		fmt.Fprintln(w, "\nAgent instances started or reported by this run")
+		for _, i := range rep.Instances {
+			by := ""
+			if i.AuthorizedBy != "" {
+				by = ", authorized by " + i.AuthorizedBy
+			}
+			fmt.Fprintf(w, "  %s  %s  %s  host %s  %s (provenance %s%s)\n", i.Time.UTC().Format("15:04:05"), i.InstanceID, event.Redact(i.Event), i.Host, i.Decision, i.Provenance, by)
+		}
 	}
 	fmt.Fprintln(w, "\nTimeline")
 	if len(rep.Timeline) == 0 {

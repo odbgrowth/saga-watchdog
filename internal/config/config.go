@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 	"path"
+	"regexp"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -28,7 +30,44 @@ type Config struct {
 	Escalation Escalation `yaml:"escalation"`
 	Network    Network    `yaml:"network"`
 	Tools      Tools      `yaml:"tools"`
+	// SecurityContext, Effects and Replication are optional. Without them a
+	// run behaves exactly as before: no persistent state, no replication rules
+	// beyond the defaults below.
+	SecurityContext SecurityContext     `yaml:"security_context"`
+	Effects         map[string][]string `yaml:"effects"`
+	Replication     Replication         `yaml:"replication"`
 }
+
+// SecurityContext names the authority envelope a project runs in. Together
+// with the operator (from the invoking environment) and the project (derived
+// by Watchdog) it keys persistent security state. The name is not security by
+// itself: it only selects which unresolved restrictions apply. Changing it is
+// a deliberate operator decision that starts a fresh context.
+type SecurityContext struct {
+	AuthorizationContext string        `yaml:"authorization_context"`
+	Retention            time.Duration `yaml:"retention"`
+	SeriousRetention     time.Duration `yaml:"serious_retention"`
+}
+
+// Replication authorizes new agent instances and runtimes. Everything not
+// listed is unauthorized: authority does not replicate by default.
+type Replication struct {
+	SameHostWorkers    int      `yaml:"same_host_workers"`
+	AllowAgents        []string `yaml:"allow_agents"`
+	InferenceEndpoints []string `yaml:"inference_endpoints"`
+	RemoteHosts        []string `yaml:"remote_hosts"`
+}
+
+// EffectTypes are the event types an effect pattern may name.
+var EffectTypes = []string{"network", "tool", "file", "git", "agent", "runtime", "inference", "remote"}
+
+var (
+	contextName = regexp.MustCompile(`^[a-z0-9][a-z0-9._:-]{0,63}$`)
+	effectName  = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
+	identifier  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:@-]{0,252}$`)
+	// OperatorID is the trusted operator identity format, such as human:onno.
+	OperatorID = regexp.MustCompile(`^[a-z][a-z0-9-]{0,15}:[A-Za-z0-9._@+-]{1,128}$`)
+)
 
 type Project struct {
 	Name string `yaml:"name"`
@@ -98,9 +137,10 @@ func Default() Config {
 			Ignore:          []string{"**/node_modules/**", "**/vendor/**", ".git/objects/**", "**/dist/**", "**/build/**"},
 			DeleteThreshold: 100, DeleteWindow: 10 * time.Second,
 		},
-		Escalation: Escalation{Window: 120 * time.Second, WarnAfter: 2, PauseAfter: 3, KillAfter: 5, ShellFollowUp: true},
-		Network:    Network{Mode: "denylist", DenyRedirectors: true},
-		Tools:      Tools{Mode: "denylist"},
+		Escalation:      Escalation{Window: 120 * time.Second, WarnAfter: 2, PauseAfter: 3, KillAfter: 5, ShellFollowUp: true},
+		Network:         Network{Mode: "denylist", DenyRedirectors: true},
+		Tools:           Tools{Mode: "denylist"},
+		SecurityContext: SecurityContext{Retention: 24 * time.Hour, SeriousRetention: 7 * 24 * time.Hour},
 	}
 }
 
@@ -246,6 +286,59 @@ func (c Config) Validate() error {
 				host = strings.TrimPrefix(host, ".")
 			}
 			if err := validHost(host); err != nil {
+				return fmt.Errorf("%s: %w", field, err)
+			}
+		}
+	}
+	sc := c.SecurityContext
+	if sc.AuthorizationContext != "" && !contextName.MatchString(sc.AuthorizationContext) {
+		return errors.New("security_context.authorization_context must be 1-64 lowercase letters, digits or ._:-")
+	}
+	if sc.Retention < time.Minute || sc.Retention > 90*24*time.Hour || sc.SeriousRetention < sc.Retention || sc.SeriousRetention > 90*24*time.Hour {
+		return errors.New("security_context retention must satisfy 1m <= retention <= serious_retention <= 2160h")
+	}
+	if len(c.Effects) > 64 {
+		return errors.New("effects supports at most 64 named effects")
+	}
+	for name, patterns := range c.Effects {
+		if !effectName.MatchString(name) {
+			return fmt.Errorf("effect name %q must be 1-64 lowercase letters, digits or ._-", name)
+		}
+		if len(patterns) == 0 || len(patterns) > 64 {
+			return fmt.Errorf("effect %s needs between 1 and 64 type:pattern entries", name)
+		}
+		for _, entry := range patterns {
+			typ, pattern, ok := strings.Cut(entry, ":")
+			if !ok || !slices.Contains(EffectTypes, typ) {
+				return fmt.Errorf("effect %s: %q must be type:pattern with type one of %s", name, entry, strings.Join(EffectTypes, ", "))
+			}
+			var err error
+			if typ == "network" {
+				err = validHost(strings.TrimPrefix(pattern, "."))
+			} else {
+				err = validPattern(pattern)
+			}
+			if err != nil {
+				return fmt.Errorf("effect %s: %w", name, err)
+			}
+		}
+	}
+	r := c.Replication
+	if r.SameHostWorkers < 0 || r.SameHostWorkers > 64 {
+		return errors.New("replication.same_host_workers must be between 0 and 64")
+	}
+	for field, list := range map[string][]string{"replication.allow_agents": r.AllowAgents, "replication.inference_endpoints": r.InferenceEndpoints, "replication.remote_hosts": r.RemoteHosts} {
+		if len(list) > 64 {
+			return fmt.Errorf("%s supports at most 64 entries", field)
+		}
+		for _, entry := range list {
+			var err error
+			if field == "replication.allow_agents" {
+				err = validPattern(entry)
+			} else if !identifier.MatchString(entry) {
+				err = fmt.Errorf("invalid identifier %q", entry)
+			}
+			if err != nil {
 				return fmt.Errorf("%s: %w", field, err)
 			}
 		}
