@@ -325,7 +325,8 @@ func (s *Store) update(now time.Time, fn func(*State, *[]auditNote) error) ([]Re
 }
 
 // Add records a denial as a restriction unless an unexpired one with the same
-// rule and target already exists. Serious (kill) restrictions are kept longer.
+// rule and target already exists; a kill upgrades an existing pause.
+// Serious (kill) restrictions are kept longer.
 // A full state refuses the new restriction with ErrFull, audited, and keeps
 // every unresolved one; the caller fails closed.
 func (s *Store) Add(now time.Time, r Restriction) error {
@@ -333,10 +334,21 @@ func (s *Store) Add(now time.Time, r Restriction) error {
 	r.Created = now
 	r.Attempts = 1
 	_, err := s.update(now, func(st *State, notes *[]auditNote) error {
-		for _, existing := range st.Restrictions {
-			if existing.Rule == r.Rule && existing.Type == r.Type && existing.Target == r.Target {
-				return nil
+		for i := range st.Restrictions {
+			existing := &st.Restrictions[i]
+			if existing.Rule != r.Rule || existing.Type != r.Type || existing.Target != r.Target {
+				continue
 			}
+			// The same denial enforced more strongly later upgrades the
+			// restriction: its decision and its serious retention.
+			if r.Decision == "kill" && existing.Decision != "kill" {
+				existing.Decision = "kill"
+				if expires := now.Add(s.serious); expires.After(existing.Expires) {
+					existing.Expires = expires
+				}
+				*notes = append(*notes, auditNote{"escalated", *existing, "", r.Rule + " enforced as kill for " + r.Type + " " + r.Target})
+			}
+			return nil
 		}
 		if len(st.Restrictions) >= maxRestrictions {
 			return ErrFull

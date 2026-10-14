@@ -112,7 +112,9 @@ Restrictions end only through:
 - **Operator clearing**: `saga-watchdog authority clear`.
 - **A new trusted authorization context** or removing the project's state.
 
-Each end is recorded in the context's audit log, and only after the state
+A denial first persisted as a pause and later enforced as a kill becomes a
+kill restriction with serious retention; the upgrade is recorded as
+`escalated`. Each end is recorded in the context's audit log, and only after the state
 change is committed: a clear or expiry whose write fails is not reported as
 done.
 

@@ -348,3 +348,33 @@ func TestAuditFollowsCommittedState(t *testing.T) {
 		t.Fatalf("history claims an uncommitted transition: %s", history.String())
 	}
 }
+
+// A denial persisted as a pause and later enforced as a kill becomes a kill
+// restriction with serious retention, and the upgrade is audited.
+func TestRepeatedDenialUpgradesToKill(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir, testContext(), time.Hour, 24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := Restriction{Rule: "unauthorized-agent-replication", Decision: "pause", Type: "agent", Target: "codex", RunID: "run_a", EventID: "evt_1"}
+	if err := s.Add(epoch, r); err != nil {
+		t.Fatal(err)
+	}
+	r.Decision, r.EventID = "kill", "evt_2"
+	if err := s.Add(epoch.Add(time.Minute), r); err != nil {
+		t.Fatal(err)
+	}
+	r.Decision, r.EventID = "pause", "evt_3"
+	if err := s.Add(epoch.Add(2*time.Minute), r); err != nil {
+		t.Fatal(err)
+	}
+	st, _ := s.Current()
+	if len(st.Restrictions) != 1 || st.Restrictions[0].Decision != "kill" || !st.Restrictions[0].Expires.Equal(epoch.Add(time.Minute+24*time.Hour)) {
+		t.Fatalf("not upgraded, or downgraded again: %+v", st.Restrictions)
+	}
+	var history strings.Builder
+	if err := History(dir, testContext(), &history); err != nil || strings.Count(history.String(), `"action":"escalated"`) != 1 {
+		t.Fatalf("upgrade not audited once: %v %s", err, history.String())
+	}
+}
