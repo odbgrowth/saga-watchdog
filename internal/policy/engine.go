@@ -58,6 +58,16 @@ type Engine struct {
 	workers workerLedger
 }
 
+// PairedKey is the event metadata the supervisor sets on a report it paired
+// with the allowed check of the same action. Only a paired report confirms
+// or releases that check's worker reservation.
+const PairedKey = "paired"
+
+func paired(ev event.Event) bool {
+	p, _ := ev.Metadata[PairedKey].(bool)
+	return p
+}
+
 // report tells a post-action report from a pre-action check. The supervisor
 // marks the operation; a check carries no result of its own.
 func report(ev event.Event) bool {
@@ -291,8 +301,10 @@ func (e *Engine) reserveWorker(ev event.Event, d *Decision) {
 			d.Reserved = true
 		}
 	case ev.Result == "failed" || ev.Result == "denied" || ev.Result == "blocked":
-		e.workers.remove(ev.Target, reserved)
-	case e.workers.promote(ev.Target):
+		if paired(ev) {
+			e.workers.remove(ev.Target, reserved)
+		}
+	case paired(ev) && e.workers.promote(ev.Target):
 	case budgeted:
 		// The worker started, whatever this run decides about it now.
 		if !e.workers.add(ev.Target, running) {
@@ -568,12 +580,17 @@ func (e *Engine) replication(ev event.Event) Decision {
 	}
 	// A report confirming a reservation is that reserved worker; any other
 	// start, a second check under the same name included, needs a slot.
-	if pairs := report(ev) && e.workers.has(ev.Target, reserved); runtimeType == "worker" && (pairs || e.workers.inUse() < r.SameHostWorkers) {
+	if pairs := report(ev) && paired(ev) && e.workers.has(ev.Target, reserved); runtimeType == "worker" && (pairs || e.workers.inUse() < r.SameHostWorkers) {
 		inUse := e.workers.inUse()
 		if !pairs {
 			inUse++
 		}
 		return Decision{Action: "allow", Authorization: "replication.same_host_workers", Severity: "info", Reason: fmt.Sprintf("worker %s authorized by replication.same_host_workers (%d of %d)", ev.Target, inUse, r.SameHostWorkers)}
+	}
+	if runtimeType == "worker" {
+		// Workers are governed by their budget alone; allow_agents never
+		// adds worker slots.
+		return decide("pause", "unauthorized-agent-replication", fmt.Sprintf("worker %s exceeds replication.same_host_workers (%d)", ev.Target, r.SameHostWorkers))
 	}
 	if listed(r.AllowAgents) {
 		return Decision{Action: "allow", Authorization: "replication.allow_agents", Severity: "info", Reason: "runtime authorized by replication.allow_agents"}

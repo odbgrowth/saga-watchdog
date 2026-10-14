@@ -719,12 +719,9 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 				if pausedCheck {
 					e.Result = "denied"
 				}
-				base := engine.Evaluate(e)
-				d, match := base, (*authority.Match)(nil)
-				// A hook's post-action report mirrors the check it follows;
-				// correlating both would count one action twice. A trusted
-				// report without a matching check (a pre-hook that failed open)
-				// is the only evidence of its action and is correlated.
+				// Pair a report with the allowed check of its action before
+				// policy sees it: only a paired report confirms or releases
+				// that check's worker reservation.
 				callID, _ := e.Metadata["tool_use_id"].(string)
 				hostKey, _ := e.Metadata["host_id"].(string)
 				runtimeKey, _ := e.Metadata["runtime_type"].(string)
@@ -734,6 +731,14 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 				if request.Operation == "emit" {
 					prior, paired = pending.take(actionKey, time.Now(), trustOf(e))
 				}
+				e.Metadata[policy.PairedKey] = paired
+				base := engine.Evaluate(e)
+				delete(e.Metadata, policy.PairedKey)
+				d, match := base, (*authority.Match)(nil)
+				// A hook's post-action report mirrors the check it follows;
+				// correlating both would count one action twice. A trusted
+				// report without a matching check (a pre-hook that failed open)
+				// is the only evidence of its action and is correlated.
 				mirrored := paired && trustOf(e) == "trusted-integration"
 				if !mirrored {
 					d, match = trajectory(&e, base)

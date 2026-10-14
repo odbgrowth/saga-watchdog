@@ -395,8 +395,16 @@ func TestReplicationRules(t *testing.T) {
 	e := New(cfg, t.TempDir())
 	worker := ev("agent", "instance.start", "test-runner", "host_l", false, "worker")
 	other := ev("agent", "instance.start", "test-runner-2", "host_l", false, "worker")
-	report := worker
-	report.Result = "success"
+	// paired is a report the supervisor matched with the check before it.
+	paired := func(e event.Event, result string) event.Event {
+		m := map[string]any{PairedKey: true}
+		for k, v := range e.Metadata {
+			m[k] = v
+		}
+		e.Metadata, e.Result = m, result
+		return e
+	}
+	report := paired(worker, "success")
 	if first, second := e.Evaluate(worker), e.Evaluate(report); first.Action != "allow" || first.Authorization != "replication.same_host_workers" || second.Action != "allow" {
 		t.Fatalf("post-action report of a counted worker counted again: %+v %+v", first, second)
 	}
@@ -539,9 +547,14 @@ func TestReplicationRules(t *testing.T) {
 		isolated.Result = result
 		e.Evaluate(isolated)
 		e.Evaluate(worker)
-		failed := worker
-		failed.Result = result
-		e.Evaluate(failed)
+		// A failure report not paired with the check releases nothing.
+		unpaired := worker
+		unpaired.Result = result
+		e.Evaluate(unpaired)
+		if d := e.Evaluate(ev("agent", "instance.start", "test-runner-3", "host_l", false, "worker")); d.Authorization == "replication.same_host_workers" {
+			t.Fatalf("unpaired %s report released a reservation: %+v", result, d)
+		}
+		e.Evaluate(paired(worker, result))
 		// The budget authorizes the next worker; the reported failures may
 		// still escalate in-run, which is a separate concern.
 		if d := e.Evaluate(ev("agent", "instance.start", "test-runner-3", "host_l", false, "worker")); d.Authorization != "replication.same_host_workers" {
@@ -647,7 +660,7 @@ func TestWorkersSharingANameHoldOneSlotEach(t *testing.T) {
 	cfg := config.Default()
 	cfg.Replication.SameHostWorkers = 2
 	start := func(result string, trust string) event.Event {
-		return event.Event{Timestamp: epoch, Type: "agent", Action: "instance.start", Target: "w", Result: result, Metadata: map[string]any{"host_id": "host_l", "remote": false, "runtime_type": "worker", "trust": trust}}
+		return event.Event{Timestamp: epoch, Type: "agent", Action: "instance.start", Target: "w", Result: result, Metadata: map[string]any{"host_id": "host_l", "remote": false, "runtime_type": "worker", "trust": trust, PairedKey: result != ""}}
 	}
 	stop := event.Event{Timestamp: epoch, Type: "agent", Action: "instance.stop", Target: "w", Result: "success", Metadata: map[string]any{"host_id": "host_l", "remote": false, "runtime_type": "worker", "trust": "trusted-integration"}}
 	e := New(cfg, t.TempDir())
@@ -667,5 +680,26 @@ func TestWorkersSharingANameHoldOneSlotEach(t *testing.T) {
 	}
 	if d := e.Evaluate(start("", "")); d.RuleID != "unauthorized-agent-replication" {
 		t.Fatalf("one stop freed both slots: %+v", d)
+	}
+}
+
+// Worker starts are governed by the worker budget alone: allow_agents never
+// adds a worker slot.
+func TestAllowAgentsDoesNotWidenTheWorkerBudget(t *testing.T) {
+	cfg := config.Default()
+	cfg.Replication.SameHostWorkers = 1
+	cfg.Replication.AllowAgents = []string{"claude"}
+	e := New(cfg, t.TempDir())
+	start := func(runtimeType string) event.Event {
+		return event.Event{Timestamp: epoch, Type: "agent", Action: "instance.start", Target: "claude", Metadata: map[string]any{"host_id": "host_l", "remote": false, "runtime_type": runtimeType}}
+	}
+	if d := e.Evaluate(start("worker")); d.Authorization != "replication.same_host_workers" {
+		t.Fatalf("first worker: %+v", d)
+	}
+	if d := e.Evaluate(start("worker")); d.RuleID != "unauthorized-agent-replication" {
+		t.Fatalf("allow_agents widened the worker budget: %+v", d)
+	}
+	if d := New(cfg, t.TempDir()).Evaluate(start("agent")); d.Authorization != "replication.allow_agents" {
+		t.Fatalf("listed agent runtime: %+v", d)
 	}
 }

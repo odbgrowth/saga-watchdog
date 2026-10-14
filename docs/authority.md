@@ -245,9 +245,11 @@ replication:
 | Agent instance discovered without known provenance | Warn (`unattributed-agent-instance`) |
 | Network traffic to another host | Not replication; network rules apply |
 
-The worker budget counts worker instances. Every allowed start check takes
-a slot, also for a name that is already running; the report that follows a
-check confirms that check's slot instead of taking another. A start reported as `failed`, `denied` or `blocked`
+The worker budget counts worker instances, and `allow_agents` never adds
+worker slots. Every allowed start check takes a slot, also for a name that
+is already running; the report the supervisor pairs with that check
+confirms its slot instead of taking another, and only such a paired report
+can release it. A start reported as `failed`, `denied` or `blocked`
 did not happen and releases its slot. Only a successful stop report
 (`emit --type agent --action instance.stop --result success`) of a counted
 worker from a trusted integration frees a slot; the check before a stop, a
