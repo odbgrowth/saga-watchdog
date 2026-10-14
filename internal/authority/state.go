@@ -239,11 +239,11 @@ func (s *Store) valid(fields map[string]json.RawMessage, st State) bool {
 	}
 	for _, r := range st.Restrictions {
 		// The writer always expires a restriction after it was created.
-		if r.ID == "" || !restrictable(r) || r.Created.IsZero() || !r.Expires.After(r.Created) || r.Attempts < 1 || len(r.Related) > maxRelated {
+		if r.ID == "" || !restrictable(r) || !stored(r.Target) || r.Created.IsZero() || !r.Expires.After(r.Created) || r.Attempts < 1 || len(r.Related) > maxRelated {
 			return false
 		}
 		for _, l := range r.Related {
-			if !linkable(l) {
+			if !linkable(l) || !stored(l.Target) {
 				return false
 			}
 		}
@@ -258,6 +258,11 @@ func (s *Store) valid(fields map[string]json.RawMessage, st State) bool {
 func restrictable(r Restriction) bool {
 	return r.Rule != "" && (r.Decision == "pause" || r.Decision == "kill") && r.Type != "" && r.Target != "" && r.RunID != "" && r.EventID != ""
 }
+
+// stored reports whether a persisted target is in the form storedTarget
+// writes, which storedTarget leaves unchanged. Any other target could never
+// match a later attempt.
+func stored(target string) bool { return storedTarget(target) == target }
 
 // linkable reports whether l carries what every trajectory step records.
 // Attempt refuses anything less.
