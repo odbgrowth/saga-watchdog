@@ -14,7 +14,9 @@ import (
 // trusted check's instance. Entries
 // expire after the window, so an abandoned check never pairs with a later
 // action. The total is bounded; a check beyond it pairs with nothing, and its
-// report then counts as its own action: once more, never less.
+// report then counts as its own action: once more, never less. A check that
+// holds a worker reservation is always kept, so its report confirms that
+// reservation; the worker ledger bounds those.
 type pendingChecks struct {
 	window time.Duration
 	max    int
@@ -32,13 +34,13 @@ func newPendingChecks(window time.Duration, max int) *pendingChecks {
 	return &pendingChecks{window: window, max: max, queues: map[string][]pendingCheck{}}
 }
 
-func (p *pendingChecks) add(key string, now time.Time, trust string, instance *authority.Instance) {
+func (p *pendingChecks) add(key string, now time.Time, trust string, instance *authority.Instance, reserved bool) {
 	if p.count >= p.max {
 		for k := range p.queues {
 			p.expire(k, now)
 		}
 	}
-	if p.count >= p.max {
+	if p.count >= p.max && !reserved {
 		return
 	}
 	p.queues[key] = append(p.queues[key], pendingCheck{at: now, trust: trust, instance: instance})

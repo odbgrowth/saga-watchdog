@@ -818,7 +818,7 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 				}
 				// Only an allowed check is followed by a report of its action.
 				if request.Operation == "check" && allowed {
-					pending.add(actionKey, time.Now(), trustOf(e), child)
+					pending.add(actionKey, time.Now(), trustOf(e), child, base.Reserved)
 				}
 				if child != nil {
 					e.Metadata["child_instance_id"], e.Metadata["provenance"], e.Metadata["authorized_by_rule"] = child.ID, child.Provenance, child.AuthorizedByRule
