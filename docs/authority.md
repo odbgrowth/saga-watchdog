@@ -101,7 +101,9 @@ atomically under a file lock so a parent run and a nested child run can share
 it. It holds at most 256 unresolved restrictions. A full state evicts
 nothing: a new restriction is refused, the refusal is audited and the run
 stops, until expiry or an operator makes room. A file that cannot be read
-safely stops the run from starting; it is never silently replaced. If the
+safely stops the run from starting; it is never silently replaced. A file
+that parses but lacks the version, context or restriction fields Watchdog
+writes counts as unreadable too, so `{}` never becomes an empty state. If the
 state cannot be read or written during a run, the run stops and the event
 that met the failure is denied (`authority-state-failed`).
 
@@ -243,6 +245,7 @@ replication:
 | Remote execution on an unlisted host | Pause (`cross-host-authority-expansion`) |
 | Agent or runtime created on an unlisted host | Stop the source run (`cross-host-authority-expansion`) |
 | Agent instance discovered without known provenance | Warn (`unattributed-agent-instance`) |
+| Discovered agent listed in `allow_agents`, or endpoint listed in `inference_endpoints` | Allow; each list attributes only its own kind |
 | Network traffic to another host | Not replication; network rules apply |
 
 The worker budget (`same_host_workers`) counts worker instances. The agent's

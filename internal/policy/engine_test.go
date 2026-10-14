@@ -361,17 +361,22 @@ func TestReplicationRules(t *testing.T) {
 		ev           event.Event
 		action, rule string
 	}{
-		"authorized same-host worker":    {ev("agent", "instance.start", "test-runner", "host_l", false, "worker"), "allow", "replication.same_host_workers"},
-		"unauthorized autonomous agent":  {ev("agent", "instance.start", "codex", "host_l", false, "agent"), "pause", "unauthorized-agent-replication"},
-		"listed agent":                   {ev("agent", "replication.attempt", "claude", "host_l", false, "agent"), "allow", "replication.allow_agents"},
-		"unauthorized model server":      {ev("inference", "endpoint.start", "0.0.0.0:8000", "host_l", false, "inference-endpoint"), "pause", "unauthorized-agent-replication"},
-		"allowed inference endpoint":     {ev("inference", "endpoint.start", "127.0.0.1:8000", "host_l", false, "inference-endpoint"), "allow", "replication.inference_endpoints"},
-		"runtime copy is replication":    {ev("runtime", "copy", "agent-bundle", "host_l", false, "agent"), "pause", "unauthorized-agent-replication"},
-		"remote execution unauthorized":  {ev("remote", "execution.attempt", "deploy-agent", "build-02", true, "agent"), "pause", "cross-host-authority-expansion"},
-		"remote execution authorized":    {ev("remote", "execution.attempt", "deploy-agent", "build-01", true, "agent"), "allow", "replication.remote_hosts"},
-		"agent started on another host":  {ev("runtime", "start", "codex", "build-02", true, "agent"), "kill", "cross-host-authority-expansion"},
-		"agent on an authorized host":    {ev("agent", "instance.start", "codex", "build-01", true, "agent"), "allow", "replication.remote_hosts"},
-		"unattributed discovered agent":  {ev("agent", "instance.discovered", "rogue", "host_l", false, "agent"), "warn", "unattributed-agent-instance"},
+		"authorized same-host worker":   {ev("agent", "instance.start", "test-runner", "host_l", false, "worker"), "allow", "replication.same_host_workers"},
+		"unauthorized autonomous agent": {ev("agent", "instance.start", "codex", "host_l", false, "agent"), "pause", "unauthorized-agent-replication"},
+		"listed agent":                  {ev("agent", "replication.attempt", "claude", "host_l", false, "agent"), "allow", "replication.allow_agents"},
+		"unauthorized model server":     {ev("inference", "endpoint.start", "0.0.0.0:8000", "host_l", false, "inference-endpoint"), "pause", "unauthorized-agent-replication"},
+		"allowed inference endpoint":    {ev("inference", "endpoint.start", "127.0.0.1:8000", "host_l", false, "inference-endpoint"), "allow", "replication.inference_endpoints"},
+		"runtime copy is replication":   {ev("runtime", "copy", "agent-bundle", "host_l", false, "agent"), "pause", "unauthorized-agent-replication"},
+		"remote execution unauthorized": {ev("remote", "execution.attempt", "deploy-agent", "build-02", true, "agent"), "pause", "cross-host-authority-expansion"},
+		"remote execution authorized":   {ev("remote", "execution.attempt", "deploy-agent", "build-01", true, "agent"), "allow", "replication.remote_hosts"},
+		"agent started on another host": {ev("runtime", "start", "codex", "build-02", true, "agent"), "kill", "cross-host-authority-expansion"},
+		"agent on an authorized host":   {ev("agent", "instance.start", "codex", "build-01", true, "agent"), "allow", "replication.remote_hosts"},
+		"unattributed discovered agent": {ev("agent", "instance.discovered", "rogue", "host_l", false, "agent"), "warn", "unattributed-agent-instance"},
+		"listed discovered agent":       {ev("agent", "instance.discovered", "claude", "host_l", false, "agent"), "allow", ""},
+		"listed discovered endpoint":    {ev("inference", "endpoint.discovered", "127.0.0.1:8000", "host_l", false, "inference-endpoint"), "allow", ""},
+		// Each discovery is attributed only by its own allowlist.
+		"agent named like an endpoint":   {ev("agent", "instance.discovered", "127.0.0.1:8000", "host_l", false, "agent"), "warn", "unattributed-agent-instance"},
+		"endpoint named like an agent":   {ev("inference", "endpoint.discovered", "claude", "host_l", false, "inference-endpoint"), "warn", "unattributed-agent-instance"},
 		"local remote.execution is noop": {ev("remote", "execution.attempt", "x", "host_l", false, "agent"), "allow", ""},
 	} {
 		t.Run(name, func(t *testing.T) {

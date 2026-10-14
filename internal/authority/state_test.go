@@ -198,7 +198,18 @@ func TestCorruptStateIsRefusedNotReplaced(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, "contexts", ctx.ID()+".json")
-	for name, body := range map[string]string{"garbage": "{not json", "other context": `{"version":1,"context":{"operator_id":"human:mallory","project_id":"abc123","authorization_context_id":"dev-local"},"restrictions":[]}`} {
+	own := `"version":1,"context":{"operator_id":"human:onno","project_id":"abc123","project":"demo","authorization_context_id":"dev-local"}`
+	for name, body := range map[string]string{
+		"garbage":       "{not json",
+		"other context": `{"version":1,"context":{"operator_id":"human:mallory","project_id":"abc123","authorization_context_id":"dev-local"},"restrictions":[]}`,
+		// Parsing is not enough: a file without Watchdog's fields would
+		// otherwise be rewritten as an empty state, dropping every restriction.
+		"empty object":        "{}",
+		"no version":          `{"context":{"operator_id":"human:onno","project_id":"abc123","project":"demo","authorization_context_id":"dev-local"},"restrictions":[]}`,
+		"empty restriction":   `{` + own + `,"restrictions":[{}]}`,
+		"unknown decision":    `{` + own + `,"restrictions":[{"id":"rst_1","rule":"network-denied","decision":"warn","type":"network","target":"x","created":"2026-01-01T00:00:00Z","expires":"2027-01-01T00:00:00Z","attempts":1}]}`,
+		"restriction no time": `{` + own + `,"restrictions":[{"id":"rst_1","rule":"network-denied","decision":"pause","type":"network","target":"x","attempts":1}]}`,
+	} {
 		if err := os.WriteFile(path, []byte(body), 0600); err != nil {
 			t.Fatal(err)
 		}

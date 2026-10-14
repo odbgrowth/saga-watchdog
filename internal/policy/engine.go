@@ -554,7 +554,12 @@ func (e *Engine) replication(ev event.Event) Decision {
 		}
 		return decide("allow", "", "")
 	case "agent.instance.discovered", "inference.endpoint.discovered":
-		if listed(r.AllowAgents) || slices.Contains(r.InferenceEndpoints, ev.Target) {
+		// Each discovery is attributed only by its own allowlist.
+		known := listed(r.AllowAgents)
+		if ev.Type == "inference" {
+			known = slices.Contains(r.InferenceEndpoints, ev.Target)
+		}
+		if known {
 			return decide("allow", "", "")
 		}
 		return decide("warn", "unattributed-agent-instance", "agent instance or endpoint discovered without known provenance; it holds no authority from this run")

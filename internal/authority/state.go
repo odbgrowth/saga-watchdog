@@ -198,23 +198,45 @@ func Open(dir string, ctx Context, retention, serious time.Duration) (*Store, er
 func (s *Store) Context() Context { return s.ctx }
 
 func (s *Store) read() (State, error) {
-	st := State{Version: 1, Context: s.ctx}
 	f, err := os.Open(s.path)
 	if errors.Is(err, os.ErrNotExist) {
-		return st, nil
+		return State{Version: 1, Context: s.ctx}, nil
 	}
 	if err != nil {
-		return st, err
+		return State{}, err
 	}
 	defer f.Close()
 	data, err := io.ReadAll(io.LimitReader(f, maxStateBytes+1))
 	if err != nil {
-		return st, err
+		return State{}, err
 	}
-	if len(data) > maxStateBytes || json.Unmarshal(data, &st) != nil || st.Version != 1 || st.Context.ID() != s.ctx.ID() {
-		return st, fmt.Errorf("%w: %s", ErrCorrupt, s.path)
+	// Decode into a zero value: a file that parses but lacks what Watchdog
+	// writes, such as {}, is corrupt, never an empty state.
+	var st State
+	if len(data) > maxStateBytes || json.Unmarshal(data, &st) != nil || !s.valid(st) {
+		return State{}, fmt.Errorf("%w: %s", ErrCorrupt, s.path)
 	}
 	return st, nil
+}
+
+// valid reports whether a decoded state carries every field Add writes.
+func (s *Store) valid(st State) bool {
+	if st.Version != 1 || st.Context.ID() != s.ctx.ID() || len(st.Restrictions) > maxRestrictions {
+		return false
+	}
+	for _, r := range st.Restrictions {
+		if r.ID == "" || !restrictable(r) || r.Created.IsZero() || r.Expires.IsZero() || r.Attempts < 1 {
+			return false
+		}
+	}
+	return true
+}
+
+// restrictable reports whether r names the rule and decision a restriction
+// needs. Add refuses anything else, so the reader never rejects Watchdog's
+// own output.
+func restrictable(r Restriction) bool {
+	return r.Rule != "" && (r.Decision == "pause" || r.Decision == "kill")
 }
 
 func (s *Store) write(st State) error {
@@ -345,6 +367,9 @@ func (s *Store) update(now time.Time, fn func(*State, *[]auditNote) error) ([]Re
 // A full state refuses the new restriction with ErrFull, audited, and keeps
 // every unresolved one; the caller fails closed.
 func (s *Store) Add(now time.Time, r Restriction) error {
+	if !restrictable(r) {
+		return fmt.Errorf("restriction needs a rule and a pause or kill decision, got %q %q", r.Rule, r.Decision)
+	}
 	r.Target = storedTarget(r.Target)
 	r.Created = now
 	r.Attempts = 1
