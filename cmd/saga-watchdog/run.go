@@ -740,7 +740,9 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 					stop(err.Error(), "audit-failed")
 					continue
 				}
-				persist(e, base, match)
+				// A restriction carries the decision that took effect for its
+				// rule: self-reported replication evidence is capped at pause.
+				persist(e, capSelfReported(e, base), match)
 				response := socket.Response{Allowed: allowed, Decision: &d}
 				if allowed && child != nil {
 					response.Instance = child

@@ -241,7 +241,9 @@ worker and take one slot. A start reported as `failed`, `denied` or `blocked`
 did not happen and releases its slot. Only a successful stop report
 (`emit --type agent --action instance.stop --result success`) of a counted
 worker frees a slot; the check before a stop, or a failed stop, does not.
-A failed report never frees the slot of a worker that already runs. The
+A failed report never frees the slot of a worker that already runs. A
+worker that policy refused but that reports it started anyway occupies
+budget too, until its successful stop. The
 check of a start and its report also name one instance ID.
 Stopping or discovering an instance never counts as an expansion.
 
@@ -302,7 +304,8 @@ Every coding-agent event carries `metadata.trust`:
 Self-reported events add evidence. They never establish identity or context,
 grant authority, clear state, authorize a child, mark provenance trusted or
 resume a run. A kill decision from replication or trajectory evidence that is
-only self-reported is capped at pause.
+only self-reported is capped at pause, and the restriction it leaves is a
+pause-level one with pause-level retention.
 
 ## Cross-host visibility
 

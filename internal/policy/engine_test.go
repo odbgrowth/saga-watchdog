@@ -453,6 +453,25 @@ func TestReplicationRules(t *testing.T) {
 	if d := e.Evaluate(other); d.Authorization != "replication.same_host_workers" {
 		t.Fatalf("a check denied by a paused run reserved a slot: %+v", d)
 	}
+	// A refused worker that starts anyway still occupies budget until its
+	// successful stop.
+	e = New(cfg, t.TempDir())
+	e.Evaluate(worker)
+	e.Evaluate(report)
+	refused := other
+	refused.Result = "success"
+	if d := e.Evaluate(refused); d.RuleID != "unauthorized-agent-replication" {
+		t.Fatalf("report of a refused worker: %+v", d)
+	}
+	e.Evaluate(stop("test-runner", "success"))
+	third := ev("agent", "instance.start", "test-runner-3", "host_l", false, "worker")
+	if d := e.Evaluate(third); d.Authorization == "replication.same_host_workers" {
+		t.Fatalf("budget ignored a refused worker that runs: %+v", d)
+	}
+	e.Evaluate(stop("test-runner-2", "success"))
+	if d := e.Evaluate(third); d.Authorization != "replication.same_host_workers" {
+		t.Fatalf("slot not freed after the refused worker stopped: %+v", d)
+	}
 	// A start that did not happen holds no slot: an isolated failed or denied
 	// report takes none, and a failed report after its check releases it.
 	for _, result := range []string{"failed", "denied", "blocked"} {

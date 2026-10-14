@@ -46,10 +46,15 @@ type Engine struct {
 	// denial has been counted; only a new denial makes the shell count again.
 	shellCounted bool
 	// workers holds the slot of each same-host worker, by target: reserved by
-	// an allowed pre-action check, or running once a report confirms it. It
-	// never exceeds replication.same_host_workers.
+	// an allowed pre-action check, or running once a report confirms it. A
+	// refused worker that reports it started anyway is running too, so the
+	// map can exceed replication.same_host_workers, up to maxWorkers.
 	workers map[string]slot
 }
+
+// maxWorkers bounds tracked workers; beyond the configured budget every new
+// worker is refused anyway.
+const maxWorkers = 256
 
 // slot is the state of one worker slot.
 type slot int
@@ -248,7 +253,20 @@ func (e *Engine) Evaluate(ev event.Event) Decision {
 // worker that already runs. Only a successful stop report frees a running
 // slot (see replication).
 func (e *Engine) reserveWorker(ev event.Event, d Decision) {
+	runtimeType, _ := ev.Metadata["runtime_type"].(string)
+	remote, _ := ev.Metadata["remote"].(bool)
+	if runtimeType != "worker" || remote || !Expansion(ev.Type, ev.Action) {
+		return
+	}
+	confirmed := report(ev) && ev.Result != "failed" && ev.Result != "denied" && ev.Result != "blocked"
 	if d.Authorization != "replication.same_host_workers" {
+		// A worker policy refused but that reports it started anyway still
+		// runs: it occupies budget until a successful stop, so later checks
+		// account for every observed worker. Workers another rule
+		// authorizes (replication.allow_agents) use no budget.
+		if confirmed && d.Authorization == "" && e.workers[ev.Target] == 0 && len(e.workers) < maxWorkers {
+			e.workers[ev.Target] = running
+		}
 		return
 	}
 	state := e.workers[ev.Target]

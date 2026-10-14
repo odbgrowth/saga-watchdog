@@ -323,3 +323,24 @@ func TestReplicationEvidenceTrustAndProvenance(t *testing.T) {
 		t.Fatalf("ordinary subprocesses were flagged: %d", violations)
 	}
 }
+
+// A restriction from self-reported replication evidence carries the capped
+// decision that took effect, and its pause-level retention.
+func TestSelfReportedReplicationPersistsCappedDecision(t *testing.T) {
+	root := fixture(t, authorityPolicy)
+	t.Setenv("SAGA_WATCHDOG_OPERATOR", "human:onno")
+	_, done, out, send := liveRun(t, root, "sleep 15")
+	if d := send("check", socket.Input{Type: "runtime", Action: "start", Target: "codex", Host: "build-02"}); d.Allowed || d.Decision.Action != "pause" || d.Decision.RuleID != "cross-host-authority-expansion" {
+		t.Fatalf("self-reported cross-host: %+v", d.Decision)
+	}
+	endRun(t, done, out, send)
+	code, text := runCLI(t, root, nil, "authority", "status")
+	if code != 0 || !strings.Contains(text, "cross-host-authority-expansion") {
+		t.Fatalf("authority status %d: %s", code, text)
+	}
+	for _, line := range strings.Split(text, "\n") {
+		if strings.Contains(line, "cross-host-authority-expansion") && !strings.Contains(line, " pause ") {
+			t.Fatalf("persisted the uncapped decision: %s", line)
+		}
+	}
+}
