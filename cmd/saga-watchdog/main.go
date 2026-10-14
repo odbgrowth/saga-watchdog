@@ -26,8 +26,6 @@ import (
 	"github.com/odbgrowth/saga-watchdog/internal/supervisor"
 )
 
-var version = "dev"
-
 const usage = `SAGA Watchdog: local deterministic agent supervisor
 
 Usage:
