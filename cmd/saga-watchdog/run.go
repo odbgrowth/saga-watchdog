@@ -210,11 +210,8 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 		case "network":
 			return policy.NetworkHost(e.Target)
 		case "file":
-			if filepath.IsAbs(e.Target) {
-				if rel, err := filepath.Rel(g.Root, e.Target); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-					return filepath.ToSlash(rel)
-				}
-			}
+			// The form policy matched, so ./a, a and /project/a are one target.
+			return engine.FileTarget(e.Target)
 		}
 		return e.Target
 	}
@@ -395,6 +392,21 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 			return base, nil
 		}
 		attempts := m.Restriction.Attempts + 1
+		if c.Mode == "enforce" {
+			// Count the step under the state lock: a parallel run in this
+			// context gets the next number, so no threshold is skipped.
+			a := attemptOf(*e)
+			now := time.Now().UTC()
+			n, err := authStore.Attempt(now, m.Restriction.ID, authority.Link{At: now, RunID: r.ID, EventID: e.ID, InstanceID: inst.ID, SessionID: a.SessionID, HostID: a.HostID, Type: e.Type, Target: a.Target, Correlation: m.Correlation})
+			if err != nil {
+				stop("cannot persist authority state: "+err.Error(), "authority-state-failed")
+				return base, nil
+			}
+			if n == 0 {
+				return base, nil // the restriction ended meanwhile
+			}
+			attempts = n
+		}
 		action := "pause"
 		switch {
 		case attempts >= c.Escalation.KillAfter:
@@ -441,8 +453,8 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 		return eff
 	}
 	// persist records an enforced event's effect on persistent state: the
-	// matched restriction's next attempt, upgraded to kill when a kill took
-	// effect, and a new restriction for a persistable base rule.
+	// matched restriction upgraded to kill when a kill took effect, and a new
+	// restriction for a persistable base rule.
 	persist := func(e event.Event, base, d policy.Decision, m *authority.Match) {
 		if authStore == nil || c.Mode != "enforce" {
 			return
@@ -450,8 +462,10 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 		base = enforced(e, base, d)
 		now := time.Now().UTC()
 		a := attemptOf(e)
-		if m != nil {
-			if err := authStore.Attempt(now, m.Restriction.ID, authority.Link{At: now, RunID: r.ID, EventID: e.ID, InstanceID: inst.ID, SessionID: a.SessionID, HostID: a.HostID, Type: e.Type, Target: a.Target, Correlation: m.Correlation}, d.Action); err != nil {
+		// The step itself was counted by trajectory; a kill that took effect
+		// on it upgrades the restriction.
+		if m != nil && d.Action == "kill" {
+			if err := authStore.Escalate(now, m.Restriction.ID, r.ID); err != nil {
 				stop("cannot persist authority state: "+err.Error(), "authority-state-failed")
 				return
 			}
@@ -581,9 +595,10 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 				// An operator widens this run's authority by one host or tool. The
 				// grant is audited before it takes effect and never overrides a
 				// deny entry.
+				// The same normalized form is granted, recorded and resolved.
 				target := request.Event.Target
 				if request.Event.Type == "network" {
-					target = strings.ToLower(strings.TrimSuffix(target, "."))
+					target = policy.NetworkHost(target)
 				}
 				if err := record(event.Event{Source: "control", Type: "process", Action: "grant", Target: request.Event.Type + " " + target, Result: "requested"}, policy.Decision{Action: "allow", Severity: "info"}); err != nil {
 					call.Reply <- socket.Response{Error: "audit unavailable"}
@@ -717,6 +732,10 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 					d = policy.Decision{Action: "pause", RuleID: "run-paused", Reason: "run is paused; explicit resume required", Severity: "high"}
 				}
 				allowed := permits(c.Mode, d) && !pausedCheck
+				if !allowed {
+					// A worker slot follows the final decision, not the engine's.
+					engine.Release(base, e.Target)
+				}
 				// The decision above used the submitted path. Record an absolute
 				// in-project path by its project-relative name for readability.
 				if e.Type == "file" && filepath.IsAbs(e.Target) {

@@ -28,6 +28,9 @@ type Decision struct {
 	// the supervisor can persist what the concrete denial was. Not part of
 	// the protocol.
 	Escalates string `json:"-"`
+	// Reserved marks a check that took a new worker slot. Not part of the
+	// protocol.
+	Reserved bool `json:"-"`
 }
 
 type observation struct {
@@ -162,12 +165,30 @@ func decide(action, rule, reason string) Decision {
 	return Decision{Action: action, RuleID: rule, Reason: reason, Severity: severity}
 }
 
+// FileTarget is the project-relative form policy uses for a file target, or
+// the target itself when it cannot be normalized.
+func (e *Engine) FileTarget(target string) string {
+	if normalized, err := normalize(e.root, target, false); err == nil {
+		return normalized
+	}
+	return target
+}
+
+// Release frees a worker slot that this event's check reserved when the
+// supervisor denies the check after all, for example on a persistent
+// trajectory. A slot taken earlier, or confirmed running, stays.
+func (e *Engine) Release(d Decision, target string) {
+	if d.Reserved && e.workers[target] == reserved {
+		delete(e.workers, target)
+	}
+}
+
 // Evaluate leaves observe/enforce handling to the supervisor: audit decisions
 // must retain the exact action that would have been applied in enforce mode.
 // Timestamp must be assigned by the supervisor, never accepted from a client.
 func (e *Engine) Evaluate(ev event.Event) (d Decision) {
 	// Worker accounting follows every decision, whichever path returns it.
-	defer func() { e.reserveWorker(ev, d) }()
+	defer func() { e.reserveWorker(ev, &d) }()
 	now := ev.Timestamp
 	if now.IsZero() {
 		now = time.Now()
@@ -261,7 +282,7 @@ func (e *Engine) Evaluate(ev event.Event) (d Decision) {
 // releases only a reservation that is still unconfirmed, never the slot of a
 // worker that already runs. Only a successful stop report frees a running
 // slot (see replication).
-func (e *Engine) reserveWorker(ev event.Event, d Decision) {
+func (e *Engine) reserveWorker(ev event.Event, d *Decision) {
 	runtimeType, _ := ev.Metadata["runtime_type"].(string)
 	remote, _ := ev.Metadata["remote"].(bool)
 	if runtimeType != "worker" || remote || !Expansion(ev.Type, ev.Action) {
@@ -291,6 +312,7 @@ func (e *Engine) reserveWorker(ev event.Event, d Decision) {
 		// nothing.
 		if state == 0 && ev.Result == "" && rank(d.Action) < rank("pause") {
 			e.workers[ev.Target] = reserved
+			d.Reserved = true
 		}
 	case ev.Result == "failed" || ev.Result == "denied" || ev.Result == "blocked":
 		if state == reserved {

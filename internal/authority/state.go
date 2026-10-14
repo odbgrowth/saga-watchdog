@@ -384,10 +384,12 @@ func (s *Store) Add(now time.Time, r Restriction) error {
 	return err
 }
 
-// Attempt appends a correlated step to a restriction's trajectory. decision
-// is what took effect for the step; a kill upgrades the restriction and its
-// retention, audited as escalated.
-func (s *Store) Attempt(now time.Time, id string, l Link, decision string) error {
+// Attempt appends a correlated step to a restriction's trajectory and
+// returns the attempt count after it. The count is taken under the state
+// lock, so concurrent runs in one context each get their own number and none
+// skips a threshold. 0 means the restriction ended meanwhile.
+func (s *Store) Attempt(now time.Time, id string, l Link) (int, error) {
+	attempts := 0
 	_, err := s.update(now, func(st *State, notes *[]auditNote) error {
 		for i := range st.Restrictions {
 			r := &st.Restrictions[i]
@@ -395,20 +397,34 @@ func (s *Store) Attempt(now time.Time, id string, l Link, decision string) error
 				continue
 			}
 			r.Attempts++
+			attempts = r.Attempts
 			l.Target = storedTarget(l.Target)
 			r.Related = append(r.Related, l)
 			if len(r.Related) > maxRelated {
 				r.Related = r.Related[len(r.Related)-maxRelated:]
 			}
 			*notes = append(*notes, auditNote{"correlated", *r, "", l.Correlation + ": " + l.Type + " " + l.Target + " in run " + l.RunID})
-			if decision == "kill" && r.Decision != "kill" {
-				r.Decision = "kill"
-				if expires := now.Add(s.serious); expires.After(r.Expires) {
-					r.Expires = expires
-				}
-				*notes = append(*notes, auditNote{"escalated", *r, "", "trajectory enforced as kill in run " + l.RunID})
-			}
 			return nil
+		}
+		return nil
+	})
+	return attempts, err
+}
+
+// Escalate upgrades a restriction to kill, with serious retention, after a
+// kill took effect on its trajectory. The upgrade is audited as escalated.
+func (s *Store) Escalate(now time.Time, id, runID string) error {
+	_, err := s.update(now, func(st *State, notes *[]auditNote) error {
+		for i := range st.Restrictions {
+			r := &st.Restrictions[i]
+			if r.ID != id || r.Decision == "kill" {
+				continue
+			}
+			r.Decision = "kill"
+			if expires := now.Add(s.serious); expires.After(r.Expires) {
+				r.Expires = expires
+			}
+			*notes = append(*notes, auditNote{"escalated", *r, "", "trajectory enforced as kill in run " + runID})
 		}
 		return nil
 	})

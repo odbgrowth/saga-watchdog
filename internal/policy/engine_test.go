@@ -423,6 +423,20 @@ func TestReplicationRules(t *testing.T) {
 	if d := e.Evaluate(other); d.Action != "allow" {
 		t.Fatalf("stopped worker slot not freed: %+v", d)
 	}
+	// A check the supervisor denies after all releases only the slot it took.
+	e = New(cfg, t.TempDir())
+	d := e.Evaluate(worker)
+	if !d.Reserved {
+		t.Fatalf("new reservation not marked: %+v", d)
+	}
+	e.Release(d, worker.Target)
+	if d := e.Evaluate(other); d.Authorization != "replication.same_host_workers" {
+		t.Fatalf("released slot still held: %+v", d)
+	}
+	e.Release(Decision{}, other.Target)
+	if d := e.Evaluate(ev("agent", "instance.start", "test-runner-4", "host_l", false, "worker")); d.Authorization == "replication.same_host_workers" {
+		t.Fatalf("release without a reservation of its own freed a slot: %+v", d)
+	}
 	// A self-reported stop frees nothing; a trusted one does.
 	e = New(cfg, t.TempDir())
 	e.Evaluate(worker)

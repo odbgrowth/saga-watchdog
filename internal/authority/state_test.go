@@ -119,7 +119,7 @@ func TestRestrictionsPersistCorrelateExpireAndClear(t *testing.T) {
 			t.Errorf("%s correlated: %+v", name, m)
 		}
 	}
-	if err := other.Attempt(now, pause.ID, Link{At: now, RunID: "run_b", EventID: "evt_9", SessionID: "sess-2", Type: "tool", Target: "vercel/deploy", Correlation: "alternate route"}, "pause"); err != nil {
+	if n, err := other.Attempt(now, pause.ID, Link{At: now, RunID: "run_b", EventID: "evt_9", SessionID: "sess-2", Type: "tool", Target: "vercel/deploy", Correlation: "alternate route"}); err != nil || n != 2 {
 		t.Fatal(err)
 	}
 	st, _ = s.Current()
@@ -491,5 +491,49 @@ func TestNonASCIITargetsMatchAfterARoundTrip(t *testing.T) {
 	}
 	if st, _ := Peek(dir, testContext()); len(st.Restrictions) != 3 {
 		t.Fatalf("duplicates or losses: %d", len(st.Restrictions))
+	}
+}
+
+// Concurrent runs in one context each get their own attempt number, so no
+// kill threshold is skipped.
+func TestConcurrentAttemptsAreCountedAtomically(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir, testContext(), time.Hour, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add(epoch, Restriction{Rule: "network-denied", Decision: "pause", Type: "network", Target: "deploy.example.com", RunID: "run_a", EventID: "evt_1"}); err != nil {
+		t.Fatal(err)
+	}
+	st, _ := s.Current()
+	id := st.Restrictions[0].ID
+	var mu sync.Mutex
+	seen := map[int]bool{}
+	var wg sync.WaitGroup
+	for i := range 8 {
+		wg.Go(func() {
+			other, err := Open(dir, testContext(), time.Hour, time.Hour)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			n, err := other.Attempt(epoch, id, Link{At: epoch, RunID: fmt.Sprintf("run_%d", i), Type: "network", Target: "deploy.example.com", Correlation: "retry in a new run"})
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			mu.Lock()
+			seen[n] = true
+			mu.Unlock()
+		})
+	}
+	wg.Wait()
+	for n := 2; n <= 9; n++ {
+		if !seen[n] {
+			t.Fatalf("attempt %d never handed out: %v", n, seen)
+		}
+	}
+	if n, err := s.Attempt(epoch, "rst_gone", Link{}); err != nil || n != 0 {
+		t.Fatalf("attempt on an ended restriction: %d %v", n, err)
 	}
 }

@@ -540,3 +540,37 @@ func TestReportPairsExpireAfterTheWindow(t *testing.T) {
 		t.Fatalf("want the denial, three checks and the late report: %d %s", code, text)
 	}
 }
+
+// Equivalent spellings of a file target are one restriction, and a grant of
+// a URL resolves the restriction on its host.
+func TestCanonicalTargetsAcrossRunsAndGrants(t *testing.T) {
+	root := fixture(t, authorityPolicy+"tools:\n  mode: denylist\n")
+	t.Setenv("SAGA_WATCHDOG_OPERATOR", "human:onno")
+	_, doneA, outA, sendA := liveRun(t, root, "sleep 15")
+	if d := sendA("check", socket.Input{Type: "file", Action: "write", Target: "./deploy.pem"}); d.Allowed {
+		t.Fatalf("protected write allowed: %+v", d.Decision)
+	}
+	endRun(t, doneA, outA, sendA)
+	_, doneB, outB, sendB := liveRun(t, root, "sleep 15")
+	if d := sendB("check", socket.Input{Type: "file", Action: "write", Target: "deploy.pem"}); d.Decision == nil || d.Decision.RuleID != "authority-expansion-after-denial" {
+		t.Fatalf("other spelling of the same file not correlated: %+v", d.Decision)
+	}
+	endRun(t, doneB, outB, sendB)
+	code, text := runCLI(t, root, nil, "authority", "status")
+	if code != 0 || strings.Count(text, "protected-path") != 1 || !strings.Contains(text, "attempts 2") {
+		t.Fatalf("want one protected-path restriction with two attempts: %d %s", code, text)
+	}
+
+	allow := fixture(t, "version: 1\nmode: enforce\nrun:\n  max_duration: 20s\n  stop_grace_period: 50ms\nsecurity_context:\n  authorization_context: dev-local\nnetwork:\n  mode: allowlist\n")
+	_, doneC, outC, sendC := liveRun(t, allow, "sleep 15")
+	if d := sendC("check", socket.Input{Type: "network", Action: "connect", Target: "api.example.com"}); d.Allowed {
+		t.Fatalf("unlisted host allowed: %+v", d.Decision)
+	}
+	if d := sendC("grant", socket.Input{Type: "network", Target: "https://api.example.com/v1"}); d.Error != "" {
+		t.Fatalf("grant: %s", d.Error)
+	}
+	endRun(t, doneC, outC, sendC)
+	if code, text := runCLI(t, allow, nil, "authority", "status"); code != 0 || strings.Contains(text, "network-unlisted") {
+		t.Fatalf("grant of a URL left its host restricted: %d %s", code, text)
+	}
+}
