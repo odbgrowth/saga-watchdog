@@ -186,6 +186,11 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 	// an instance of its own.
 	const maxAssigned = 256
 	assigned := map[string]*authority.Instance{}
+	// checked holds pre-action checks until the trusted report of the same
+	// action arrives. Bounded; beyond it a report is correlated as well, which
+	// can count once more but never less.
+	const maxChecked = 1024
+	checked := map[string]bool{}
 	trustedProducers := map[string]bool{"saga-watchdog": true}
 	for _, spec := range integrations.Specs {
 		for _, file := range spec.Files {
@@ -426,6 +431,16 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 		}
 		return d
 	}
+	// enforced is what a restriction records: the base rule with the
+	// strongest action that took effect for the event, so an escalated kill
+	// upgrades it and capped self-reported evidence does not.
+	enforced := func(e event.Event, base, d policy.Decision) policy.Decision {
+		eff := capSelfReported(e, base)
+		if d.Action == "kill" && eff.Action == "pause" {
+			eff.Action = "kill"
+		}
+		return eff
+	}
 	persist := func(e event.Event, base policy.Decision, m *authority.Match) {
 		if authStore == nil || c.Mode != "enforce" {
 			return
@@ -456,7 +471,7 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 			stop("audit write failed: "+err.Error(), "audit-failed")
 			return
 		}
-		persist(e, base, m)
+		persist(e, enforced(e, base, d), m)
 		apply(d)
 	}
 	for {
@@ -677,8 +692,20 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 				base := engine.Evaluate(e)
 				d, match := base, (*authority.Match)(nil)
 				// A hook's post-action report mirrors the check it follows;
-				// correlating both would count one action twice.
-				if request.Operation == "check" || trustOf(e) != "trusted-integration" {
+				// correlating both would count one action twice. A trusted
+				// report without a matching check (a pre-hook that failed open)
+				// is the only evidence of its action and is correlated.
+				callID, _ := e.Metadata["tool_use_id"].(string)
+				pair := strings.Join([]string{e.Type, canonical(e), callID}, "\x00")
+				mirrored := request.Operation == "emit" && trustOf(e) == "trusted-integration" && checked[pair]
+				if request.Operation == "check" {
+					if len(checked) < maxChecked {
+						checked[pair] = true
+					}
+				} else {
+					delete(checked, pair)
+				}
+				if !mirrored {
 					d, match = trajectory(&e, base)
 				}
 				d = capSelfReported(e, d)
@@ -740,9 +767,7 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 					stop(err.Error(), "audit-failed")
 					continue
 				}
-				// A restriction carries the decision that took effect for its
-				// rule: self-reported replication evidence is capped at pause.
-				persist(e, capSelfReported(e, base), match)
+				persist(e, enforced(e, base, d), match)
 				response := socket.Response{Allowed: allowed, Decision: &d}
 				if allowed && child != nil {
 					response.Instance = child

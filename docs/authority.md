@@ -112,11 +112,12 @@ Restrictions end only through:
 - **Operator clearing**: `saga-watchdog authority clear`.
 - **A new trusted authorization context** or removing the project's state.
 
-A denial first persisted as a pause and later enforced as a kill becomes a
-kill restriction with serious retention; the upgrade is recorded as
-`escalated`. Each end is recorded in the context's audit log, and only after the state
-change is committed: a clear or expiry whose write fails is not reported as
-done.
+A denial first persisted as a pause and later enforced as a kill, directly or
+by escalation, becomes a kill restriction with serious retention; the upgrade
+is recorded as `escalated`. Each change is recorded in the context's audit
+log. The record is committed together with the state change, so a clear or
+expiry whose write fails is never reported as done, and a record the log
+could not take stays with the state until the next update writes it.
 
 ## Rule: authority-expansion-after-denial
 
@@ -128,6 +129,10 @@ context, is one of:
 | Retry of the same target in a new run | `deploy.example.com` denied in run A, retried in run B |
 | Alternate route to the same declared effect | `deploy.example.com` denied; `vercel/deploy` tool attempted |
 | New agent instance, runtime, endpoint or host after a denial | Agent A denied, then starts agent B |
+
+Each action counts once. A trusted hook's post-action report that mirrors a
+pre-action check of the same action is not counted again; a report without
+such a check, for example after a pre-hook failed open, is counted.
 
 Effects are how policy declares that different targets reach the same
 restricted outcome. Without them only same-target retries and new instances

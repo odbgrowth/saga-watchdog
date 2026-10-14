@@ -96,6 +96,10 @@ type State struct {
 	Context      Context       `json:"context"`
 	Restrictions []Restriction `json:"restrictions"`
 	Updated      time.Time     `json:"updated"`
+	// PendingAudit holds audit records committed with the state transition
+	// they describe but not yet in the audit log. The next update writes
+	// them, so the log can repeat a record but never lose one.
+	PendingAudit []event.Event `json:"pending_audit,omitempty"`
 }
 
 // Attempt describes an event that may continue an earlier trajectory.
@@ -311,16 +315,26 @@ func (s *Store) update(now time.Time, fn func(*State, *[]auditNote) error) ([]Re
 	if err := fn(&st, &notes); err != nil {
 		return nil, err
 	}
+	for _, n := range notes {
+		st.PendingAudit = append(st.PendingAudit, s.record(now, n.action, n.restriction, n.who, n.reason))
+	}
 	st.Updated = now
+	// The transition and its audit records commit together.
 	if err := s.write(st); err != nil {
 		return nil, err
 	}
 	s.remember(st)
-	for _, n := range notes {
-		if err := s.audit(now, n.action, n.restriction, n.who, n.reason); err != nil {
-			return expired, err
-		}
+	if len(st.PendingAudit) == 0 {
+		return expired, nil
 	}
+	if err := s.appendLog(st.PendingAudit...); err != nil {
+		return expired, err
+	}
+	st.PendingAudit = nil
+	if err := s.write(st); err != nil {
+		return expired, err
+	}
+	s.remember(st)
 	return expired, nil
 }
 
@@ -456,9 +470,14 @@ func QuarantineCorrupt(dir string, ctx Context, who, reason string) (string, err
 	return moved, s.audit(now, "cleared", Restriction{ID: "all", Type: "state", Target: filepath.Base(moved)}, who, "corrupt state moved aside: "+reason)
 }
 
-// audit appends one context-level event: restricted, correlated, expired,
-// resolved or cleared. The log rotates once at 1 MiB.
+// audit appends one context-level event outside a state update.
 func (s *Store) audit(now time.Time, action string, r Restriction, who, reason string) error {
+	return s.appendLog(s.record(now, action, r, who, reason))
+}
+
+// appendLog appends audit records to the context log, which rotates once at
+// 1 MiB.
+func (s *Store) appendLog(records ...event.Event) error {
 	if info, err := os.Stat(s.log); err == nil && info.Size() > maxLogBytes {
 		if err := os.Rename(s.log, s.log+".1"); err != nil {
 			return err
@@ -469,22 +488,31 @@ func (s *Store) audit(now time.Time, action string, r Restriction, who, reason s
 		return err
 	}
 	defer f.Close()
+	for _, e := range records {
+		b, err := json.Marshal(e)
+		if err != nil {
+			return err
+		}
+		if _, err = f.Write(append(b, '\n')); err != nil {
+			return err
+		}
+	}
+	return f.Sync()
+}
+
+// record builds one sanitized context-level audit event: restricted,
+// escalated, correlated, expired, resolved, cleared or refused.
+func (s *Store) record(now time.Time, action string, r Restriction, who, reason string) event.Event {
 	e := event.Event{ID: event.NewID("evt"), Timestamp: now, ProjectID: s.ctx.Project, RunID: r.RunID, Source: "authority", Type: "authority_state", Action: action, Target: r.ID, Result: "recorded", Severity: "info", RuleID: r.Rule,
 		Metadata: map[string]any{"reason": reason, "context_id": s.ctx.ID(), "operator_id": s.ctx.OperatorID, "authorization_context_id": s.ctx.AuthorizationContextID, "original_event_id": r.EventID, "attempts": r.Attempts}}
 	if who != "" {
 		e.Metadata["who"] = who
 	}
-	b, err := json.Marshal(e.Sanitized())
-	if err != nil {
-		return err
-	}
-	if _, err = f.Write(append(b, '\n')); err != nil {
-		return err
-	}
-	return f.Sync()
+	return e.Sanitized()
 }
 
-// History copies the context audit log, oldest rotation first.
+// History copies the context audit log, oldest rotation first, followed by
+// committed records the log has not received yet.
 func History(dir string, ctx Context, w io.Writer) error {
 	base := filepath.Join(dir, "contexts", ctx.ID()+".events.jsonl")
 	for _, name := range []string{base + ".1", base} {
@@ -498,6 +526,21 @@ func History(dir string, ctx Context, w io.Writer) error {
 		_, err = io.Copy(w, f)
 		f.Close()
 		if err != nil {
+			return err
+		}
+	}
+	// A state that cannot be read has no records to add; the log above is
+	// still the operator's evidence for deciding what to do with it.
+	st, err := Peek(dir, ctx)
+	if err != nil {
+		return nil
+	}
+	for _, e := range st.PendingAudit {
+		b, err := json.Marshal(e)
+		if err != nil {
+			return err
+		}
+		if _, err = w.Write(append(b, '\n')); err != nil {
 			return err
 		}
 	}

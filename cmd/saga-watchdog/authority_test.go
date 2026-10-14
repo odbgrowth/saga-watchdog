@@ -344,3 +344,64 @@ func TestSelfReportedReplicationPersistsCappedDecision(t *testing.T) {
 		}
 	}
 }
+
+// A trusted report is skipped by correlation only when it mirrors a check of
+// the same action; a report whose pre-hook failed open is correlated. A
+// denial escalated to kill persists as a kill restriction.
+func TestTrustedReportsAndEscalatedKillsPersist(t *testing.T) {
+	root := fixture(t, authorityPolicy)
+	t.Setenv("SAGA_WATCHDOG_OPERATOR", "human:onno")
+	deploy := socket.Input{Type: "network", Action: "connect", Target: "deploy.example.com", Producer: "saga-watchdog"}
+
+	_, doneA, outA, sendA := liveRun(t, root, "sleep 15")
+	if d := sendA("check", deploy); d.Allowed {
+		t.Fatalf("run A denial: %+v", d.Decision)
+	}
+	endRun(t, doneA, outA, sendA)
+
+	_, doneB, outB, sendB := liveRun(t, root, "sleep 15")
+	report := deploy
+	report.Result = "success"
+	report.CallID = "call-1"
+	if d := sendB("emit", report); d.Decision == nil || d.Decision.RuleID != "authority-expansion-after-denial" {
+		t.Fatalf("unpaired trusted report not correlated: %+v", d.Decision)
+	}
+	sendB("resume", socket.Input{})
+	paired := deploy
+	paired.CallID = "call-2"
+	sendB("check", paired)
+	sendB("resume", socket.Input{})
+	paired.Result = "success"
+	sendB("emit", paired)
+	endRun(t, doneB, outB, sendB)
+	if code, text := runCLI(t, root, nil, "authority", "status"); code != 0 || !strings.Contains(text, "attempts 3") {
+		t.Fatalf("want one attempt per action (denial, unpaired report, paired check): %d %s", code, text)
+	}
+
+	// Repeated denials escalate to kill in one run; the restriction follows.
+	_, doneC, outC, sendC := liveRun(t, root, "sleep 15")
+	var last socket.Response
+	for range 5 {
+		last = sendC("check", deploy)
+		if last.Decision != nil && last.Decision.Action == "kill" {
+			break
+		}
+	}
+	if last.Decision == nil || last.Decision.Action != "kill" {
+		t.Fatalf("no escalation to kill: %+v", last.Decision)
+	}
+	select {
+	case <-doneC:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("kill did not stop the run: %s", outC.String())
+	}
+	code, text := runCLI(t, root, nil, "authority", "status")
+	if code != 0 {
+		t.Fatalf("authority status %d: %s", code, text)
+	}
+	for _, line := range strings.Split(text, "\n") {
+		if strings.Contains(line, "network-denied") && !strings.Contains(line, " kill ") {
+			t.Fatalf("escalated kill persisted as %s", line)
+		}
+	}
+}

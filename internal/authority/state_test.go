@@ -378,3 +378,46 @@ func TestRepeatedDenialUpgradesToKill(t *testing.T) {
 		t.Fatalf("upgrade not audited once: %v %s", err, history.String())
 	}
 }
+
+// A transition whose audit append fails keeps its record with the committed
+// state, and the next update writes it: history never loses a transition.
+func TestAuditRecordsSurviveALogFailure(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir, testContext(), time.Hour, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add(epoch, Restriction{Rule: "network-denied", Decision: "pause", Type: "network", Target: "deploy.example.com", RunID: "run_a", EventID: "evt_1"}); err != nil {
+		t.Fatal(err)
+	}
+	// A directory in place of the log makes every append fail, even as root.
+	if err := os.Remove(s.log); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(s.log, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Clear(epoch, "", "human:onno", "reviewed"); err == nil {
+		t.Fatal("clear reported success without its audit record")
+	}
+	st, err := Peek(dir, testContext())
+	if err != nil || len(st.Restrictions) != 0 || len(st.PendingAudit) != 1 || st.PendingAudit[0].Action != "cleared" {
+		t.Fatalf("committed clear lost its record: %v %+v", err, st)
+	}
+	if err := os.Remove(s.log); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add(epoch, Restriction{Rule: "tool-denied", Decision: "pause", Type: "tool", Target: "vercel/deploy", RunID: "run_b", EventID: "evt_2"}); err != nil {
+		t.Fatal(err)
+	}
+	var history strings.Builder
+	if err := History(dir, testContext(), &history); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(history.String(), `"action":"cleared"`) || !strings.Contains(history.String(), "vercel/deploy") {
+		t.Fatalf("pending record not written by the next update: %s", history.String())
+	}
+	if st, _ := Peek(dir, testContext()); len(st.PendingAudit) != 0 {
+		t.Fatalf("flushed records still pending: %+v", st.PendingAudit)
+	}
+}
