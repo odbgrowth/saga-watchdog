@@ -725,7 +725,13 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 				callID, _ := e.Metadata["tool_use_id"].(string)
 				hostKey, _ := e.Metadata["host_id"].(string)
 				runtimeKey, _ := e.Metadata["runtime_type"].(string)
-				actionKey := strings.Join([]string{e.Type, e.Action, canonical(e), callID, hostKey, runtimeKey}, "\x00")
+				// A file pairs by its lexical name: the symlink-resolved name
+				// can change as a result of the action itself.
+				pairTarget := canonical(e)
+				if e.Type == "file" {
+					pairTarget = engine.LexicalFileTarget(e.Target)
+				}
+				actionKey := strings.Join([]string{e.Type, e.Action, pairTarget, callID, hostKey, runtimeKey}, "\x00")
 				var prior pendingCheck
 				paired := false
 				if request.Operation == "emit" {

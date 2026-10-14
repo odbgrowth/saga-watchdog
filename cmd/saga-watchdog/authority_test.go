@@ -711,3 +711,46 @@ func TestStopsFreeTheInstanceTheyName(t *testing.T) {
 		t.Fatalf("audit recorded %d stops of %s, want 2", stopped, a)
 	}
 }
+
+// A check and its report pair by a target form their action cannot change:
+// deleting a link changes what its name resolves to, yet the check and its
+// report are one action. In observe mode a second step would show the
+// enforced decision one attempt early.
+func TestFilePairsSurviveTheirOwnAction(t *testing.T) {
+	policy := strings.Replace(authorityPolicy, "'tool:vercel/*']", "'tool:vercel/*', 'file:build/**']", 1)
+	root := fixture(t, policy)
+	t.Setenv("SAGA_WATCHDOG_OPERATOR", "human:onno")
+	deploy := socket.Input{Type: "network", Action: "connect", Target: "deploy.example.com", Producer: "saga-watchdog"}
+	_, doneA, outA, sendA := liveRun(t, root, "sleep 15")
+	sendA("check", deploy)
+	endRun(t, doneA, outA, sendA)
+
+	if err := os.WriteFile(filepath.Join(root, ".saga-watchdog.yaml"), []byte(strings.Replace(policy, "mode: enforce", "mode: observe", 1)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// build/** is ignored by the watcher, so only the reported action counts.
+	dir := filepath.Join(root, "build")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "target.txt"), []byte("x"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "alias.txt")
+	if err := os.Symlink("target.txt", link); err != nil {
+		t.Fatal(err)
+	}
+	_, doneB, outB, sendB := liveRun(t, root, "sleep 15")
+	remove := socket.Input{Type: "file", Action: "delete", Target: "build/alias.txt", Producer: "saga-watchdog", CallID: "call-f"}
+	if d := sendB("check", remove); !d.Allowed || d.Decision.RuleID != "authority-expansion-after-denial" {
+		t.Fatalf("correlated delete: %+v", d.Decision)
+	}
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	remove.Result = "success"
+	if d := sendB("emit", remove); d.Decision == nil || d.Decision.RuleID == "authority-expansion-after-denial" {
+		t.Fatalf("the report of the checked delete counted as another step: %+v", d.Decision)
+	}
+	endRun(t, doneB, outB, sendB)
+}

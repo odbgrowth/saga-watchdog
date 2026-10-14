@@ -182,6 +182,13 @@ func (e *Engine) FileTarget(target string) string {
 	if resolved, err := normalize(e.root, target, true); err == nil {
 		return resolved
 	}
+	return e.LexicalFileTarget(target)
+}
+
+// LexicalFileTarget is the project-relative form of a file target without
+// resolving symlinks, else the target itself. Unlike FileTarget it cannot
+// change when the action itself creates or removes a link or its target.
+func (e *Engine) LexicalFileTarget(target string) string {
 	if normalized, err := normalize(e.root, target, false); err == nil {
 		return normalized
 	}
