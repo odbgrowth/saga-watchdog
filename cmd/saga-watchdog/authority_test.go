@@ -756,28 +756,37 @@ func TestFilePairsSurviveTheirOwnAction(t *testing.T) {
 	endRun(t, doneB, outB, sendB)
 }
 
-// Checks pair only with reports from the same producer: one trusted adapter's
-// report never consumes another adapter's identical check.
+// Checks pair only with reports of the same lineage: one trusted adapter's or
+// session's report never consumes another's identical check.
 func TestReportsPairWithTheirOwnProducer(t *testing.T) {
-	root := fixture(t, "version: 1\nmode: enforce\nrun:\n  max_duration: 20s\n  stop_grace_period: 50ms\nreplication:\n  same_host_workers: 2\n")
+	root := fixture(t, "version: 1\nmode: enforce\nrun:\n  max_duration: 20s\n  stop_grace_period: 50ms\nreplication:\n  same_host_workers: 4\n")
 	if _, err := claudecode.Setup(filepath.Join(root, ".claude", "settings.json")); err != nil {
 		t.Fatal(err)
 	}
 	_, done, out, send := liveRun(t, root, "sleep 15")
-	start := func(producer string) socket.Input {
-		return socket.Input{Type: "agent", Action: "instance.start", Target: "runner", Producer: producer, RuntimeType: "worker"}
-	}
-	a, b := send("check", start("saga-watchdog")), send("check", start("claude-code"))
-	if a.Instance == nil || b.Instance == nil {
-		t.Fatalf("checks: %+v %+v", a.Decision, b.Decision)
-	}
-	failed := start("claude-code")
-	failed.Result = "failed"
-	send("emit", failed)
-	started := start("saga-watchdog")
-	started.Result = "success"
-	if r := send("emit", started); r.Instance == nil || r.Instance.ID != a.Instance.ID {
-		t.Fatalf("report took another producer's instance: got %+v, want %s", r.Instance, a.Instance.ID)
+	for name, pair := range map[string][2]socket.Input{
+		"producer": {
+			{Type: "agent", Action: "instance.start", Target: "runner", Producer: "saga-watchdog", RuntimeType: "worker"},
+			{Type: "agent", Action: "instance.start", Target: "runner", Producer: "claude-code", RuntimeType: "worker"},
+		},
+		"session": {
+			{Type: "agent", Action: "instance.start", Target: "runner", Producer: "claude-code", SessionID: "sess-a", RuntimeType: "worker"},
+			{Type: "agent", Action: "instance.start", Target: "runner", Producer: "claude-code", SessionID: "sess-b", RuntimeType: "worker"},
+		},
+	} {
+		mine, other := pair[0], pair[1]
+		a, b := send("check", mine), send("check", other)
+		if a.Instance == nil || b.Instance == nil {
+			t.Fatalf("%s checks: %+v %+v", name, a.Decision, b.Decision)
+		}
+		failed := other
+		failed.Result = "failed"
+		send("emit", failed)
+		started := mine
+		started.Result = "success"
+		if r := send("emit", started); r.Instance == nil || r.Instance.ID != a.Instance.ID {
+			t.Fatalf("%s: report took another check's instance: got %+v, want %s", name, r.Instance, a.Instance.ID)
+		}
 	}
 	endRun(t, done, out, send)
 }
