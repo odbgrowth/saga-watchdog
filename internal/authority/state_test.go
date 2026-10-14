@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/odbgrowth/saga-watchdog/internal/event"
 )
@@ -462,5 +463,33 @@ func TestQuarantineAuditSurvivesALogFailure(t *testing.T) {
 	var history strings.Builder
 	if err := History(dir, ctx, &history); err != nil || !strings.Contains(history.String(), "corrupt state moved aside") {
 		t.Fatalf("quarantine record lost: %v %s", err, history.String())
+	}
+}
+
+// Non-ASCII targets are stored as printable ASCII that survives JSON and
+// matches the same target again, so retries of a Unicode path correlate.
+func TestNonASCIITargetsMatchAfterARoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir, testContext(), time.Hour, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range []string{"caf\u00e9/config.yaml", "\u65e5\u672c\u8a9e/\u30d5\u30a1\u30a4\u30eb.txt", strings.Repeat("\u00e9", 300)} {
+		if got := storedTarget(target); !utf8.ValidString(got) || strings.ContainsFunc(got, func(c rune) bool { return c > 0x7e }) {
+			t.Fatalf("%q stored as %q", target, got)
+		}
+		if err := s.Add(epoch, Restriction{Rule: "protected-path", Decision: "pause", Type: "file", Target: target, RunID: "run_a", EventID: "evt_" + target[:2]}); err != nil {
+			t.Fatal(err)
+		}
+		st, err := Peek(dir, testContext())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := st.Correlate(Attempt{Type: "file", Target: target, RunID: "run_b"}, epoch); !ok {
+			t.Fatalf("retry of %q not correlated after a round trip", target)
+		}
+	}
+	if st, _ := Peek(dir, testContext()); len(st.Restrictions) != 3 {
+		t.Fatalf("duplicates or losses: %d", len(st.Restrictions))
 	}
 }

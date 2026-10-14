@@ -688,6 +688,8 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 					e.Metadata["host_id"], e.Metadata["remote"], e.Metadata["runtime_type"] = hostID, remote, runtimeType
 					creation = !strings.HasSuffix(e.Action, ".stop") && !strings.HasSuffix(e.Action, ".discovered") && e.Type != "remote"
 				}
+				// Policy weighs trust where a report would release budget.
+				e.Metadata["trust"] = trustOf(e)
 				pausedCheck := r.Status == "paused" && request.Operation == "check"
 				if pausedCheck {
 					e.Result = "denied"
@@ -704,7 +706,7 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 				var prior pendingCheck
 				paired := false
 				if request.Operation == "emit" {
-					prior, paired = pending.take(actionKey, time.Now())
+					prior, paired = pending.take(actionKey, time.Now(), trustOf(e))
 				}
 				mirrored := paired && trustOf(e) == "trusted-integration"
 				if !mirrored {
@@ -756,7 +758,7 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 				}
 				// Only an allowed check is followed by a report of its action.
 				if request.Operation == "check" && allowed {
-					pending.add(actionKey, time.Now(), child)
+					pending.add(actionKey, time.Now(), trustOf(e), child)
 				}
 				if child != nil {
 					e.Metadata["child_instance_id"], e.Metadata["provenance"], e.Metadata["authorized_by_rule"] = child.ID, child.Provenance, child.AuthorizedByRule

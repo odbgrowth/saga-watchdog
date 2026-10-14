@@ -14,32 +14,35 @@ func TestPendingChecks(t *testing.T) {
 	now := time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC)
 	p := newPendingChecks(time.Minute, 3)
 	first, second := &authority.Instance{ID: "a"}, &authority.Instance{ID: "b"}
-	p.add("start", now, first)
-	p.add("start", now.Add(time.Second), second)
-	if c, ok := p.take("start", now.Add(2*time.Second)); !ok || c.instance != first {
+	p.add("start", now, "trusted-integration", first)
+	p.add("start", now.Add(time.Second), "trusted-integration", second)
+	if _, ok := p.take("start", now.Add(2*time.Second), "self-reported"); ok {
+		t.Fatal("a self-reported report took a trusted check")
+	}
+	if c, ok := p.take("start", now.Add(2*time.Second), "trusted-integration"); !ok || c.instance != first {
 		t.Fatalf("first report: %v %+v", ok, c)
 	}
-	if c, ok := p.take("start", now.Add(3*time.Second)); !ok || c.instance != second {
+	if c, ok := p.take("start", now.Add(3*time.Second), "trusted-integration"); !ok || c.instance != second {
 		t.Fatalf("second report: %v %+v", ok, c)
 	}
-	if _, ok := p.take("start", now.Add(4*time.Second)); ok {
+	if _, ok := p.take("start", now.Add(4*time.Second), "trusted-integration"); ok {
 		t.Fatal("a third report paired with no check")
 	}
 	// A check whose report never came does not pair after the window.
-	p.add("start", now, first)
-	if _, ok := p.take("start", now.Add(2*time.Minute)); ok || p.count != 0 {
+	p.add("start", now, "trusted-integration", first)
+	if _, ok := p.take("start", now.Add(2*time.Minute), "trusted-integration"); ok || p.count != 0 {
 		t.Fatalf("abandoned check paired or kept: %d", p.count)
 	}
 	// Full: expired checks make room; unexpired ones are never evicted.
 	for _, key := range []string{"a", "b", "c"} {
-		p.add(key, now, nil)
+		p.add(key, now, "self-reported", nil)
 	}
-	p.add("d", now.Add(time.Second), nil)
-	if _, ok := p.take("d", now.Add(time.Second)); ok {
+	p.add("d", now.Add(time.Second), "self-reported", nil)
+	if _, ok := p.take("d", now.Add(time.Second), "self-reported"); ok {
 		t.Fatal("bound exceeded")
 	}
-	p.add("d", now.Add(2*time.Minute), nil)
-	if _, ok := p.take("d", now.Add(2*time.Minute)); !ok || p.count != 0 {
+	p.add("d", now.Add(2*time.Minute), "self-reported", nil)
+	if _, ok := p.take("d", now.Add(2*time.Minute), "self-reported"); !ok || p.count != 0 {
 		t.Fatalf("expired checks not pruned when full: %d", p.count)
 	}
 }

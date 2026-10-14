@@ -423,6 +423,20 @@ func TestReplicationRules(t *testing.T) {
 	if d := e.Evaluate(other); d.Action != "allow" {
 		t.Fatalf("stopped worker slot not freed: %+v", d)
 	}
+	// A self-reported stop frees nothing; a trusted one does.
+	e = New(cfg, t.TempDir())
+	e.Evaluate(worker)
+	claimed := stop("test-runner", "success")
+	claimed.Metadata["trust"] = "self-reported"
+	e.Evaluate(claimed)
+	if d := e.Evaluate(other); d.RuleID != "unauthorized-agent-replication" {
+		t.Fatalf("self-reported stop widened the budget: %+v", d)
+	}
+	claimed.Metadata["trust"] = "trusted-integration"
+	e.Evaluate(claimed)
+	if d := e.Evaluate(other); d.Authorization != "replication.same_host_workers" {
+		t.Fatalf("trusted stop did not free the slot: %+v", d)
+	}
 	// A failed duplicate start of a worker that already runs keeps the running
 	// worker's slot.
 	for _, result := range []string{"failed", "denied", "blocked"} {

@@ -248,7 +248,9 @@ own name. A pre-action check and the report that follows it name the same
 worker and take one slot. A start reported as `failed`, `denied` or `blocked`
 did not happen and releases its slot. Only a successful stop report
 (`emit --type agent --action instance.stop --result success`) of a counted
-worker frees a slot; the check before a stop, or a failed stop, does not.
+worker from a trusted integration frees a slot; the check before a stop, a
+failed stop or a self-reported stop does not, so a self-reported worker
+holds its slot until the run ends.
 A failed report never frees the slot of a worker that already runs. A
 worker that policy refused but that reports it started anyway occupies
 budget too, until its successful stop. Watchdog tracks up to 256 workers by

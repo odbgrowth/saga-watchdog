@@ -479,6 +479,31 @@ func TestConcurrentStartsKeepTheirInstances(t *testing.T) {
 	}
 }
 
+// A self-reported report never takes over the instance and provenance a
+// trusted check of the same start was given.
+func TestSelfReportedReportsDoNotTakeTrustedInstances(t *testing.T) {
+	root := fixture(t, "version: 1\nmode: enforce\nrun:\n  max_duration: 20s\n  stop_grace_period: 50ms\nreplication:\n  allow_agents: [claude]\n")
+	r, done, out, send := liveRun(t, root, "sleep 15")
+	trusted := socket.Input{Type: "agent", Action: "instance.start", Target: "claude", Producer: "saga-watchdog", CallID: "call-9"}
+	d := send("check", trusted)
+	if !d.Allowed || d.Instance == nil {
+		t.Fatalf("trusted check: %+v", d.Decision)
+	}
+	claimed := socket.Input{Type: "agent", Action: "instance.start", Target: "claude", CallID: "call-9", Result: "success"}
+	send("emit", claimed)
+	endRun(t, done, out, send)
+	events, _ := readEvents(t, root, r.ID)
+	for _, e := range events {
+		if e.Type == "agent" && e.Metadata["operation"] == "emit" {
+			if e.Metadata["child_instance_id"] == d.Instance.ID {
+				t.Fatalf("self-reported report took the trusted check's instance: %v", e.Metadata)
+			}
+			return
+		}
+	}
+	t.Fatal("no report recorded")
+}
+
 // A check pairs with its report only within the escalation window; a report
 // after that counts as its own action.
 func TestReportPairsExpireAfterTheWindow(t *testing.T) {

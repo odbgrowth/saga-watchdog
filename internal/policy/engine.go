@@ -529,8 +529,10 @@ func (e *Engine) replication(ev event.Event) Decision {
 	switch ev.Type + "." + ev.Action {
 	case "agent.instance.stop":
 		// Only a reported successful stop of a counted worker frees its slot;
-		// a pre-action check or a failed stop leaves the worker running.
-		if report(ev) && ev.Result == "success" {
+		// a pre-action check or a failed stop leaves the worker running. A
+		// self-reported stop is recorded but frees nothing: the agent's own
+		// word never widens its budget.
+		if trust, _ := ev.Metadata["trust"].(string); report(ev) && ev.Result == "success" && trust != "self-reported" {
 			delete(e.workers, ev.Target)
 		}
 		return decide("allow", "", "")
