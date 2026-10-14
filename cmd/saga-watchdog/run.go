@@ -732,8 +732,25 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 					prior, paired = pending.take(actionKey, time.Now(), trustOf(e))
 				}
 				e.Metadata[policy.PairedKey] = paired
+				// Worker slots are kept by instance: a start gets its instance
+				// ID before policy sees it (the check's, for the report paired
+				// with it), and a stop names the instance it ends.
+				instanceID := ""
+				switch {
+				case creation && prior.instance != nil:
+					instanceID = prior.instance.ID
+				case creation:
+					instanceID = authority.NewInstanceID()
+				case e.Type == "agent" && e.Action == "instance.stop":
+					instanceID = request.Event.Instance
+					if instanceID != "" {
+						e.Metadata["stopped_instance_id"] = instanceID
+					}
+				}
+				e.Metadata[policy.InstanceKey] = instanceID
 				base := engine.Evaluate(e)
 				delete(e.Metadata, policy.PairedKey)
+				delete(e.Metadata, policy.InstanceKey)
 				d, match := base, (*authority.Match)(nil)
 				// A hook's post-action report mirrors the check it follows;
 				// correlating both would count one action twice. A trusted
@@ -750,7 +767,7 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 				allowed := permits(c.Mode, d) && !pausedCheck
 				if !allowed {
 					// A worker slot follows the final decision, not the engine's.
-					engine.Release(base, e.Target)
+					engine.Release(base, instanceID)
 				}
 				// The decision above used the submitted path. Record an absolute
 				// in-project path by its project-relative name for readability.
@@ -779,7 +796,7 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 					// start and gets a new instance.
 					child = prior.instance
 					if child == nil {
-						child = &authority.Instance{ID: authority.NewInstanceID(), ParentID: inst.ID, PrincipalID: "agent:" + e.Target, HostID: hostID, RuntimeType: runtimeType, Provenance: "unknown"}
+						child = &authority.Instance{ID: instanceID, ParentID: inst.ID, PrincipalID: "agent:" + e.Target, HostID: hostID, RuntimeType: runtimeType, Provenance: "unknown"}
 						if allowed {
 							child.AuthorizedByRule = base.Authorization
 							if authStore != nil {

@@ -398,8 +398,25 @@ func TestReplicationRules(t *testing.T) {
 	// that follows it name one worker, and only a stop of a counted worker
 	// frees its slot.
 	e := New(cfg, t.TempDir())
-	worker := ev("agent", "instance.start", "test-runner", "host_l", false, "worker")
-	other := ev("agent", "instance.start", "test-runner-2", "host_l", false, "worker")
+	// as names the instance the supervisor assigned to an event.
+	as := func(e event.Event, id string) event.Event {
+		m := map[string]any{InstanceKey: id}
+		for k, v := range e.Metadata {
+			if k != InstanceKey {
+				m[k] = v
+			}
+		}
+		e.Metadata = m
+		return e
+	}
+	// fresh is a new check: the supervisor gives every check its own instance.
+	n := 0
+	fresh := func(target string) event.Event {
+		n++
+		return as(ev("agent", "instance.start", target, "host_l", false, "worker"), fmt.Sprintf("agtinst_fresh_%d", n))
+	}
+	worker := as(ev("agent", "instance.start", "test-runner", "host_l", false, "worker"), "agtinst_w")
+	other := as(ev("agent", "instance.start", "test-runner-2", "host_l", false, "worker"), "agtinst_o")
 	// paired is a report the supervisor matched with the check before it.
 	paired := func(e event.Event, result string) event.Event {
 		m := map[string]any{PairedKey: true}
@@ -413,12 +430,12 @@ func TestReplicationRules(t *testing.T) {
 	if first, second := e.Evaluate(worker), e.Evaluate(report); first.Action != "allow" || first.Authorization != "replication.same_host_workers" || second.Action != "allow" {
 		t.Fatalf("post-action report of a counted worker counted again: %+v %+v", first, second)
 	}
-	stop := func(target, result string) event.Event {
-		s := ev("agent", "instance.stop", target, "host_l", false, "worker")
+	stop := func(id, target, result string) event.Event {
+		s := as(ev("agent", "instance.stop", target, "host_l", false, "worker"), id)
 		s.Result = result
 		return s
 	}
-	e.Evaluate(stop("never-started", "success"))
+	e.Evaluate(stop("agtinst_never", "never-started", "success"))
 	if d := e.Evaluate(other); d.RuleID != "unauthorized-agent-replication" {
 		t.Fatalf("budget not enforced, or a stop of an uncounted worker freed a slot: %+v", d)
 	}
@@ -427,7 +444,7 @@ func TestReplicationRules(t *testing.T) {
 	e = New(cfg, t.TempDir())
 	e.Evaluate(worker)
 	for _, result := range []string{"", "failed", "denied", "blocked"} {
-		e.Evaluate(stop("test-runner", result))
+		e.Evaluate(stop("agtinst_w", "test-runner", result))
 		if d := e.Evaluate(other); d.RuleID != "unauthorized-agent-replication" {
 			t.Fatalf("stop with result %q freed a live worker's slot: %+v", result, d)
 		}
@@ -435,7 +452,7 @@ func TestReplicationRules(t *testing.T) {
 	e = New(cfg, t.TempDir())
 	e.Evaluate(worker)
 	e.Evaluate(report)
-	e.Evaluate(stop("test-runner", "success"))
+	e.Evaluate(stop("agtinst_w", "test-runner", "success"))
 	if d := e.Evaluate(other); d.Action != "allow" {
 		t.Fatalf("stopped worker slot not freed: %+v", d)
 	}
@@ -445,19 +462,19 @@ func TestReplicationRules(t *testing.T) {
 	if !d.Reserved {
 		t.Fatalf("new reservation not marked: %+v", d)
 	}
-	e.Release(d, worker.Target)
+	e.Release(d, "agtinst_w")
 	if d := e.Evaluate(other); d.Authorization != "replication.same_host_workers" {
 		t.Fatalf("released slot still held: %+v", d)
 	}
-	e.Release(Decision{}, other.Target)
-	if d := e.Evaluate(ev("agent", "instance.start", "test-runner-4", "host_l", false, "worker")); d.Authorization == "replication.same_host_workers" {
+	e.Release(Decision{}, "agtinst_o")
+	if d := e.Evaluate(fresh("test-runner-4")); d.Authorization == "replication.same_host_workers" {
 		t.Fatalf("release without a reservation of its own freed a slot: %+v", d)
 	}
 	// A self-reported stop frees nothing; a trusted one does.
 	e = New(cfg, t.TempDir())
 	e.Evaluate(worker)
 	e.Evaluate(report)
-	claimed := stop("test-runner", "success")
+	claimed := stop("agtinst_w", "test-runner", "success")
 	claimed.Metadata["trust"] = "self-reported"
 	e.Evaluate(claimed)
 	if d := e.Evaluate(other); d.RuleID != "unauthorized-agent-replication" {
@@ -474,10 +491,11 @@ func TestReplicationRules(t *testing.T) {
 		e = New(cfg, t.TempDir())
 		e.Evaluate(worker)
 		e.Evaluate(report)
-		e.Evaluate(worker)
-		duplicate := worker
-		duplicate.Result = result
-		e.Evaluate(duplicate)
+		again := fresh("test-runner")
+		e.Evaluate(again)
+		e.Evaluate(paired(again, result))
+		// A failure report naming the running instance is not its stop.
+		e.Evaluate(paired(worker, result))
 		if d := e.Evaluate(other); d.RuleID != "unauthorized-agent-replication" {
 			t.Fatalf("%s duplicate start freed a running worker's slot: %+v", result, d)
 		}
@@ -509,12 +527,12 @@ func TestReplicationRules(t *testing.T) {
 	if d := e.Evaluate(refused); d.RuleID != "unauthorized-agent-replication" {
 		t.Fatalf("report of a refused worker: %+v", d)
 	}
-	e.Evaluate(stop("test-runner", "success"))
-	third := ev("agent", "instance.start", "test-runner-3", "host_l", false, "worker")
+	e.Evaluate(stop("agtinst_w", "test-runner", "success"))
+	third := as(ev("agent", "instance.start", "test-runner-3", "host_l", false, "worker"), "agtinst_t")
 	if d := e.Evaluate(third); d.Authorization == "replication.same_host_workers" {
 		t.Fatalf("budget ignored a refused worker that runs: %+v", d)
 	}
-	e.Evaluate(stop("test-runner-2", "success"))
+	e.Evaluate(stop("agtinst_o", "test-runner-2", "success"))
 	if d := e.Evaluate(third); d.Authorization != "replication.same_host_workers" {
 		t.Fatalf("slot not freed after the refused worker stopped: %+v", d)
 	}
@@ -529,19 +547,19 @@ func TestReplicationRules(t *testing.T) {
 	if d := e.Evaluate(refused); d.Action != "kill" {
 		t.Fatalf("report after the refusal: %+v", d)
 	}
-	e.Evaluate(stop("test-runner", "success"))
+	e.Evaluate(stop("agtinst_w", "test-runner", "success"))
 	if d := e.Evaluate(third); d.Authorization == "replication.same_host_workers" {
 		t.Fatalf("a killed-but-running worker left the budget: %+v", d)
 	}
 	// Workers beyond the tracking bound hold budget for the rest of the run.
 	e = New(cfg, t.TempDir())
 	for i := range maxWorkers + 1 {
-		started := ev("agent", "instance.start", fmt.Sprintf("w-%d", i), "host_l", false, "worker")
+		started := as(ev("agent", "instance.start", fmt.Sprintf("w-%d", i), "host_l", false, "worker"), fmt.Sprintf("agtinst_started_%d", i))
 		started.Result = "success"
 		e.Evaluate(started)
 	}
 	for i := range maxWorkers {
-		e.Evaluate(stop(fmt.Sprintf("w-%d", i), "success"))
+		e.Evaluate(stop(fmt.Sprintf("agtinst_started_%d", i), fmt.Sprintf("w-%d", i), "success"))
 	}
 	if d := e.Evaluate(third); d.Authorization == "replication.same_host_workers" {
 		t.Fatalf("an untracked running worker left the budget: %+v", d)
@@ -558,19 +576,19 @@ func TestReplicationRules(t *testing.T) {
 		unpaired := worker
 		unpaired.Result = result
 		e.Evaluate(unpaired)
-		if d := e.Evaluate(ev("agent", "instance.start", "test-runner-3", "host_l", false, "worker")); d.Authorization == "replication.same_host_workers" {
+		if d := e.Evaluate(fresh("test-runner-3")); d.Authorization == "replication.same_host_workers" {
 			t.Fatalf("unpaired %s report released a reservation: %+v", result, d)
 		}
 		claimed := paired(worker, result)
 		claimed.Metadata["trust"] = "self-reported"
 		e.Evaluate(claimed)
-		if d := e.Evaluate(ev("agent", "instance.start", "test-runner-3", "host_l", false, "worker")); d.Authorization == "replication.same_host_workers" {
+		if d := e.Evaluate(fresh("test-runner-3")); d.Authorization == "replication.same_host_workers" {
 			t.Fatalf("self-reported %s report released a reservation: %+v", result, d)
 		}
 		e.Evaluate(paired(worker, result))
 		// The budget authorizes the next worker; the reported failures may
 		// still escalate in-run, which is a separate concern.
-		if d := e.Evaluate(ev("agent", "instance.start", "test-runner-3", "host_l", false, "worker")); d.Authorization != "replication.same_host_workers" {
+		if d := e.Evaluate(fresh("test-runner-3")); d.Authorization != "replication.same_host_workers" {
 			t.Fatalf("%s start kept a slot: %+v", result, d)
 		}
 	}
@@ -668,57 +686,78 @@ func TestCanonicalFileTargetsAndRemoteHosts(t *testing.T) {
 	}
 }
 
-// Workers sharing a target name each need and hold their own slot.
+// Workers sharing a target name each need and hold their own slot, and a
+// stop frees only the instance it names.
 func TestWorkersSharingANameHoldOneSlotEach(t *testing.T) {
 	cfg := config.Default()
 	cfg.Replication.SameHostWorkers = 2
-	start := func(result string, trust string) event.Event {
-		return event.Event{Timestamp: epoch, Type: "agent", Action: "instance.start", Target: "w", Result: result, Metadata: map[string]any{"host_id": "host_l", "remote": false, "runtime_type": "worker", "trust": trust, PairedKey: result != ""}}
+	meta := func(id, trust string) map[string]any {
+		return map[string]any{"host_id": "host_l", "remote": false, "runtime_type": "worker", "trust": trust, InstanceKey: id}
 	}
-	stop := event.Event{Timestamp: epoch, Type: "agent", Action: "instance.stop", Target: "w", Result: "success", Metadata: map[string]any{"host_id": "host_l", "remote": false, "runtime_type": "worker", "trust": "trusted-integration"}}
-	e := New(cfg, t.TempDir())
-	for i := range 2 {
-		if d := e.Evaluate(start("", "")); d.Authorization != "replication.same_host_workers" || !d.Reserved {
-			t.Fatalf("check %d: %+v", i, d)
+	check := func(id string) event.Event {
+		return event.Event{Timestamp: epoch, Type: "agent", Action: "instance.start", Target: "w", Metadata: meta(id, "")}
+	}
+	report := func(id string) event.Event {
+		m := meta(id, "trusted-integration")
+		m[PairedKey] = true
+		return event.Event{Timestamp: epoch, Type: "agent", Action: "instance.start", Target: "w", Result: "success", Metadata: m}
+	}
+	stop := func(id string) event.Event {
+		return event.Event{Timestamp: epoch, Type: "agent", Action: "instance.stop", Target: "w", Result: "success", Metadata: meta(id, "trusted-integration")}
+	}
+	run := func(e *Engine, events ...event.Event) {
+		for _, ev := range events {
+			e.Evaluate(ev)
 		}
 	}
-	if d := e.Evaluate(start("", "")); d.RuleID != "unauthorized-agent-replication" {
+	e := New(cfg, t.TempDir())
+	for _, id := range []string{"a", "b"} {
+		if d := e.Evaluate(check(id)); d.Authorization != "replication.same_host_workers" || !d.Reserved {
+			t.Fatalf("check %s: %+v", id, d)
+		}
+	}
+	if d := e.Evaluate(check("c")); d.RuleID != "unauthorized-agent-replication" {
 		t.Fatalf("a third worker under the same name got a slot: %+v", d)
 	}
-	e.Evaluate(start("success", "trusted-integration"))
-	e.Evaluate(start("success", "trusted-integration"))
-	e.Evaluate(stop)
-	if d := e.Evaluate(start("", "")); d.Authorization != "replication.same_host_workers" {
+	run(e, report("a"), report("b"), stop("a"))
+	if d := e.Evaluate(check("d")); d.Authorization != "replication.same_host_workers" {
 		t.Fatalf("one stop did not free one slot: %+v", d)
 	}
-	if d := e.Evaluate(start("", "")); d.RuleID != "unauthorized-agent-replication" {
+	if d := e.Evaluate(check("e")); d.RuleID != "unauthorized-agent-replication" {
 		t.Fatalf("one stop freed both slots: %+v", d)
 	}
+	// A repeated or delayed stop of an instance that already stopped frees
+	// nothing, even when another worker of that name runs now.
+	run(e, report("d"), stop("a"))
+	if d := e.Evaluate(check("f")); d.RuleID != "unauthorized-agent-replication" {
+		t.Fatalf("a repeated stop freed another instance's slot: %+v", d)
+	}
+	// A stop that names no instance, or one this run never counted, frees
+	// nothing.
+	run(e, stop(""), stop("unknown"))
+	if d := e.Evaluate(check("g")); d.RuleID != "unauthorized-agent-replication" {
+		t.Fatalf("a stop without a counted instance freed a slot: %+v", d)
+	}
 	// Only a stop of a same-host worker touches the ledger: a remote stop or
-	// a stop of another runtime type under the same name frees nothing.
-	for name, meta := range map[string]map[string]any{
-		"remote": {"host_id": "build-02", "remote": true, "runtime_type": "worker", "trust": "trusted-integration"},
-		"agent":  {"host_id": "host_l", "remote": false, "runtime_type": "agent", "trust": "trusted-integration"},
+	// a stop of another runtime type naming the same instance frees nothing.
+	for name, m := range map[string]map[string]any{
+		"remote": {"host_id": "build-02", "remote": true, "runtime_type": "worker", "trust": "trusted-integration", InstanceKey: "a"},
+		"agent":  {"host_id": "host_l", "remote": false, "runtime_type": "agent", "trust": "trusted-integration", InstanceKey: "a"},
 	} {
 		e = New(cfg, t.TempDir())
-		e.Evaluate(start("", ""))
-		e.Evaluate(start("success", "trusted-integration"))
-		e.Evaluate(start("", ""))
-		e.Evaluate(start("success", "trusted-integration"))
-		other := stop
-		other.Metadata = meta
+		run(e, check("a"), report("a"), check("b"), report("b"))
+		other := stop("a")
+		other.Metadata = m
 		e.Evaluate(other)
-		if d := e.Evaluate(start("", "")); d.RuleID != "unauthorized-agent-replication" {
+		if d := e.Evaluate(check("c")); d.RuleID != "unauthorized-agent-replication" {
 			t.Fatalf("%s stop freed a local worker's slot: %+v", name, d)
 		}
 	}
-	// A stop with no running worker of its name never releases an
-	// outstanding reservation: only that check's paired report can.
+	// A stop never releases an outstanding reservation: only that check's
+	// paired report can.
 	e = New(cfg, t.TempDir())
-	e.Evaluate(start("", ""))
-	e.Evaluate(start("", ""))
-	e.Evaluate(stop)
-	if d := e.Evaluate(start("", "")); d.RuleID != "unauthorized-agent-replication" {
+	run(e, check("a"), check("b"), stop("a"))
+	if d := e.Evaluate(check("c")); d.RuleID != "unauthorized-agent-replication" {
 		t.Fatalf("a stop released a reservation: %+v", d)
 	}
 }

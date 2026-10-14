@@ -42,6 +42,10 @@ type Input struct {
 	// can only narrow what replication policy allows.
 	Host        string `json:"host,omitempty"`
 	RuntimeType string `json:"runtime_type,omitempty"`
+	// Instance names the instance an agent.instance.stop ends: the instance
+	// ID the supervisor returned for its start. A stop frees only that
+	// instance's worker slot.
+	Instance string `json:"instance,omitempty"`
 }
 
 // expansionActions are the supported actions of agent, runtime, inference and
@@ -113,7 +117,7 @@ func Validate(r Request, controls bool) error {
 			if r.Event.Target == "" || len(r.Event.Target) > 253 || strings.ContainsAny(r.Event.Target, "\x00\r\n") {
 				return errors.New("grant requires a target of at most 253 bytes without control characters")
 			}
-			if r.Event.Action != "" || r.Event.Result != "" || len(r.Event.Lineage()) != 0 || r.Event.Host != "" || r.Event.RuntimeType != "" {
+			if r.Event.Action != "" || r.Event.Result != "" || len(r.Event.Lineage()) != 0 || r.Event.Host != "" || r.Event.RuntimeType != "" || r.Event.Instance != "" {
 				return errors.New("grant carries only a type and a target")
 			}
 		default:
@@ -135,6 +139,12 @@ func Validate(r Request, controls bool) error {
 	}
 	if !slices.Contains(RuntimeTypes, r.Event.RuntimeType) {
 		return errors.New("runtime_type must be agent, worker, model-server or inference-endpoint")
+	}
+	if r.Event.Instance != "" && (r.Event.Type != "agent" || r.Event.Action != "instance.stop") {
+		return errors.New("instance names the instance an agent.instance.stop ends")
+	}
+	if len(r.Event.Instance) > 128 || strings.ContainsFunc(r.Event.Instance, func(c rune) bool { return c < 0x21 || c > 0x7e }) {
+		return errors.New("instance must be at most 128 printable ASCII bytes without spaces")
 	}
 	if len(r.Event.Host) > 253 || strings.ContainsFunc(r.Event.Host, func(c rune) bool { return c < 0x21 || c > 0x7e }) {
 		return errors.New("host must be at most 253 printable ASCII bytes without spaces")

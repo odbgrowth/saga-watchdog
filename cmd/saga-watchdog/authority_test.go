@@ -662,3 +662,41 @@ func TestRuntimeTypesKeepTheirInstances(t *testing.T) {
 		}
 	}
 }
+
+// A stop frees the slot of the instance it names, once: a repeated or
+// delayed stop of a worker that already stopped never frees the slot of a
+// later worker under the same name.
+func TestStopsFreeTheInstanceTheyName(t *testing.T) {
+	root := fixture(t, "version: 1\nmode: enforce\nrun:\n  max_duration: 20s\n  stop_grace_period: 50ms\nreplication:\n  same_host_workers: 2\n")
+	_, done, out, send := liveRun(t, root, "sleep 15")
+	start := socket.Input{Type: "agent", Action: "instance.start", Target: "runner", Producer: "saga-watchdog", RuntimeType: "worker"}
+	// started returns the new worker's instance and the slots in use with it.
+	started := func() (string, string) {
+		check := send("check", start)
+		if !check.Allowed || check.Instance == nil {
+			t.Fatalf("worker check: %+v", check.Decision)
+		}
+		report := start
+		report.Result = "success"
+		if r := send("emit", report); r.Instance == nil || r.Instance.ID != check.Instance.ID {
+			t.Fatalf("report took another instance: %+v", r.Instance)
+		}
+		return check.Instance.ID, check.Decision.Reason
+	}
+	stop := func(id string) {
+		send("emit", socket.Input{Type: "agent", Action: "instance.stop", Target: "runner", Producer: "saga-watchdog", RuntimeType: "worker", Result: "success", Instance: id})
+	}
+	a, _ := started()
+	stop("")
+	stop("agtinst_unknown")
+	b, reason := started()
+	if !strings.Contains(reason, "(2 of 2)") {
+		t.Fatalf("a stop naming no counted instance freed a slot: %s", reason)
+	}
+	stop(a)
+	stop(a)
+	if _, reason := started(); !strings.Contains(reason, "(2 of 2)") {
+		t.Fatalf("a repeated stop of %s freed the slot of %s: %s", a, b, reason)
+	}
+	endRun(t, done, out, send)
+}

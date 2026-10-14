@@ -210,33 +210,54 @@ func (s *Store) read() (State, error) {
 	if err != nil {
 		return State{}, err
 	}
-	// Decode into a zero value: a file that parses but lacks what Watchdog
-	// writes, such as {}, is corrupt, never an empty state.
+	// Decode into a zero value and require every field Watchdog writes: a
+	// file that parses but lacks them, such as {}, is corrupt, never an
+	// empty state.
+	var fields map[string]json.RawMessage
 	var st State
-	if len(data) > maxStateBytes || json.Unmarshal(data, &st) != nil || !s.valid(st) {
+	if len(data) > maxStateBytes || json.Unmarshal(data, &fields) != nil || json.Unmarshal(data, &st) != nil || !s.valid(fields, st) {
 		return State{}, fmt.Errorf("%w: %s", ErrCorrupt, s.path)
 	}
 	return st, nil
 }
 
-// valid reports whether a decoded state carries every field Add writes.
-func (s *Store) valid(st State) bool {
-	if st.Version != 1 || st.Context.ID() != s.ctx.ID() || len(st.Restrictions) > maxRestrictions {
+// valid reports whether a decoded state carries every field the writer
+// emits. An empty restriction list is written as null, so only its key is
+// required.
+func (s *Store) valid(fields map[string]json.RawMessage, st State) bool {
+	for _, key := range []string{"version", "context", "restrictions", "updated"} {
+		if _, ok := fields[key]; !ok {
+			return false
+		}
+	}
+	if st.Version != 1 || st.Context.ID() != s.ctx.ID() || st.Updated.IsZero() || len(st.Restrictions) > maxRestrictions {
 		return false
 	}
 	for _, r := range st.Restrictions {
-		if r.ID == "" || !restrictable(r) || r.Created.IsZero() || r.Expires.IsZero() || r.Attempts < 1 {
+		if r.ID == "" || !restrictable(r) || r.Created.IsZero() || r.Expires.IsZero() || r.Attempts < 1 || len(r.Related) > maxRelated {
 			return false
+		}
+		for _, l := range r.Related {
+			if !linkable(l) {
+				return false
+			}
 		}
 	}
 	return true
 }
 
-// restrictable reports whether r names the rule and decision a restriction
-// needs. Add refuses anything else, so the reader never rejects Watchdog's
-// own output.
+// restrictable reports whether r carries what every restriction records:
+// the rule and its pause or kill decision, the type and target it denied,
+// and the run and event that earned it. Add refuses anything less, so the
+// reader never rejects Watchdog's own output.
 func restrictable(r Restriction) bool {
-	return r.Rule != "" && (r.Decision == "pause" || r.Decision == "kill")
+	return r.Rule != "" && (r.Decision == "pause" || r.Decision == "kill") && r.Type != "" && r.Target != "" && r.RunID != "" && r.EventID != ""
+}
+
+// linkable reports whether l carries what every trajectory step records.
+// Attempt refuses anything less.
+func linkable(l Link) bool {
+	return !l.At.IsZero() && l.RunID != "" && l.EventID != "" && l.Type != "" && l.Target != "" && l.Correlation != ""
 }
 
 func (s *Store) write(st State) error {
@@ -368,7 +389,7 @@ func (s *Store) update(now time.Time, fn func(*State, *[]auditNote) error) ([]Re
 // every unresolved one; the caller fails closed.
 func (s *Store) Add(now time.Time, r Restriction) error {
 	if !restrictable(r) {
-		return fmt.Errorf("restriction needs a rule and a pause or kill decision, got %q %q", r.Rule, r.Decision)
+		return errors.New("restriction needs a rule, a pause or kill decision, a type, a target, a run ID and an event ID")
 	}
 	r.Target = storedTarget(r.Target)
 	r.Created = now
@@ -421,6 +442,9 @@ func (s *Store) Attempt(now time.Time, id string, l Link) (int, error) {
 			r := &st.Restrictions[i]
 			if r.ID != id {
 				continue
+			}
+			if !linkable(l) {
+				return errors.New("trajectory step needs a time, a run ID, an event ID, a type, a target and a correlation")
 			}
 			r.Attempts++
 			attempts = r.Attempts

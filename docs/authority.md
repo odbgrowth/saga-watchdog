@@ -253,21 +253,25 @@ own word never widens it:
 
 - Every allowed start check takes a slot, also for a name that already runs.
   `allow_agents` never adds worker slots.
-- The report the supervisor pairs with that check, within the escalation
-  window, confirms the slot instead of taking another. The check and its
-  report also name one instance ID.
+- Every slot belongs to one instance ID, which the response to the start
+  check (or to an unpaired start report) returns. The report the supervisor
+  pairs with that check, within the escalation window, confirms the slot
+  instead of taking another.
 - A start reported as `failed`, `denied` or `blocked` releases its slot only
   when the report is paired with the check and comes from a trusted
   integration.
-- A trusted successful stop report
+- A trusted successful stop report that names the instance
   (`emit --type agent --action instance.stop --runtime-type worker --result
-  success`, on this host) frees the slot of one running worker of that name. It never releases an unconfirmed
-  reservation. The check before a stop, a failed stop and a self-reported
-  stop free nothing.
+  success --instance agtinst_...`, on this host) frees that running
+  instance's slot, once. A repeated or delayed stop of an instance that
+  already stopped frees nothing, even when another worker of the same name
+  runs. A stop never releases an unconfirmed reservation. The check before a
+  stop, a failed stop, a self-reported stop and a stop without a counted
+  instance free nothing.
 - A worker that policy refused but that reports it started anyway takes a
   slot too, until its trusted stop.
-- Watchdog tracks up to 256 workers; a refused worker beyond that holds
-  budget until the run ends.
+- Watchdog tracks up to 256 workers; a worker beyond that, or one without an
+  instance ID, holds budget until the run ends.
 - Stopping or discovering an instance never counts as an expansion.
 
 A worker known only from the agent's own reports therefore holds its slot

@@ -63,6 +63,17 @@ type Engine struct {
 // or releases that check's worker reservation.
 const PairedKey = "paired"
 
+// InstanceKey is the event metadata the supervisor sets to the worker
+// instance an event is about: the instance it assigns to a start (the check's,
+// for the report paired with it) or the instance a stop names. Worker slots
+// are kept by this ID, so an event about one instance never frees another.
+const InstanceKey = "worker_instance"
+
+func instanceOf(ev event.Event) string {
+	id, _ := ev.Metadata[InstanceKey].(string)
+	return id
+}
+
 func paired(ev event.Event) bool {
 	p, _ := ev.Metadata[PairedKey].(bool)
 	return p
@@ -177,12 +188,12 @@ func (e *Engine) FileTarget(target string) string {
 	return target
 }
 
-// Release frees a worker slot that this event's check reserved when the
-// supervisor denies the check after all, for example on a persistent
-// trajectory. A slot taken earlier, or confirmed running, stays.
-func (e *Engine) Release(d Decision, target string) {
+// Release frees the worker slot that this event's check reserved for
+// instance id when the supervisor denies the check after all, for example on
+// a persistent trajectory. A slot taken earlier, or confirmed running, stays.
+func (e *Engine) Release(d Decision, id string) {
 	if d.Reserved {
-		e.workers.remove(target, reserved)
+		e.workers.remove(id, reserved)
 	}
 }
 
@@ -280,8 +291,8 @@ func (e *Engine) Evaluate(ev event.Event) (d Decision) {
 }
 
 // reserveWorker moves worker slots through their states. An allowed check
-// reserves a new slot; the report that follows confirms one reservation of
-// its target as running. A start reported as failed, denied or blocked
+// reserves a slot for its instance; the report paired with it confirms that
+// reservation as running. A start reported as failed, denied or blocked
 // releases only an unconfirmed reservation, never the slot of a worker that
 // already runs. A confirmed start without a reservation is a worker of its
 // own, counted even when policy refused it. Only a trusted successful stop
@@ -293,23 +304,30 @@ func (e *Engine) reserveWorker(ev event.Event, d *Decision) {
 		return
 	}
 	budgeted := d.Authorization == "" || d.Authorization == "replication.same_host_workers"
+	id := instanceOf(ev)
 	switch {
 	case !report(ev):
 		// A check the supervisor already denied (a paused run) reserves
 		// nothing; neither does one another rule authorized.
-		if d.Authorization == "replication.same_host_workers" && ev.Result == "" && rank(d.Action) < rank("pause") && e.workers.add(ev.Target, reserved) {
-			d.Reserved = true
+		// A check whose instance cannot be tracked holds budget until the
+		// run ends: fail closed.
+		if d.Authorization == "replication.same_host_workers" && ev.Result == "" && rank(d.Action) < rank("pause") {
+			if e.workers.add(id, reserved) {
+				d.Reserved = true
+			} else {
+				e.workers.untracked++
+			}
 		}
 	case ev.Result == "failed" || ev.Result == "denied" || ev.Result == "blocked":
 		// Pairing proves the report follows the check, not that the start
 		// failed: a self-reported failure never widens the budget.
 		if trust, _ := ev.Metadata["trust"].(string); paired(ev) && trust != "self-reported" {
-			e.workers.remove(ev.Target, reserved)
+			e.workers.remove(id, reserved)
 		}
-	case paired(ev) && e.workers.promote(ev.Target):
+	case paired(ev) && e.workers.promote(id):
 	case budgeted:
 		// The worker started, whatever this run decides about it now.
-		if !e.workers.add(ev.Target, running) {
+		if !e.workers.add(id, running) {
 			e.workers.untracked++
 		}
 	}
@@ -545,12 +563,14 @@ func (e *Engine) replication(ev event.Event) Decision {
 		// a pre-action check or a failed stop leaves the worker running. A
 		// self-reported stop is recorded but frees nothing: the agent's own
 		// word never widens its budget.
-		// A stop ends a running worker; it never touches an outstanding
-		// reservation, which only its own paired report can release. Only a
-		// stop that names a same-host worker touches the worker ledger.
+		// A stop ends the running worker instance it names; it never
+		// touches an outstanding reservation, which only its own paired
+		// report can release. Only a stop that names a same-host worker
+		// touches the worker ledger, and a repeated or delayed stop of an
+		// instance that already stopped frees nothing.
 		trust, _ := ev.Metadata["trust"].(string)
 		if report(ev) && ev.Result == "success" && trust != "self-reported" && runtimeType == "worker" && !remote {
-			e.workers.remove(ev.Target, running)
+			e.workers.remove(instanceOf(ev), running)
 		}
 		return decide("allow", "", "")
 	case "agent.instance.discovered", "inference.endpoint.discovered":
@@ -589,7 +609,7 @@ func (e *Engine) replication(ev event.Event) Decision {
 	}
 	// A report confirming a reservation is that reserved worker; any other
 	// start, a second check under the same name included, needs a slot.
-	if pairs := report(ev) && paired(ev) && e.workers.has(ev.Target, reserved); runtimeType == "worker" && (pairs || e.workers.inUse() < r.SameHostWorkers) {
+	if pairs := report(ev) && paired(ev) && e.workers.has(instanceOf(ev), reserved); runtimeType == "worker" && (pairs || e.workers.inUse() < r.SameHostWorkers) {
 		inUse := e.workers.inUse()
 		if !pairs {
 			inUse++

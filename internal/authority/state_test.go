@@ -199,16 +199,41 @@ func TestCorruptStateIsRefusedNotReplaced(t *testing.T) {
 	}
 	path := filepath.Join(dir, "contexts", ctx.ID()+".json")
 	own := `"version":1,"context":{"operator_id":"human:onno","project_id":"abc123","project":"demo","authorization_context_id":"dev-local"}`
+	// A complete state opens; each case below lacks one part of it.
+	complete := `{` + own + `,"updated":"2026-01-01T00:00:00Z","restrictions":[{"id":"rst_1","rule":"network-denied","decision":"pause","type":"network","target":"x","run_id":"run_a","event_id":"evt_1","created":"2026-01-01T00:00:00Z","expires":"2099-01-01T00:00:00Z","attempts":2,"related":[{"at":"2026-01-01T00:00:00Z","run_id":"run_b","event_id":"evt_2","type":"network","target":"x","correlation":"retry in a new run"}]}]}`
+	if err := os.WriteFile(path, []byte(complete), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if s, err := Open(dir, ctx, time.Hour, time.Hour); err != nil {
+		t.Fatalf("complete state: %v", err)
+	} else if st, err := s.Current(); err != nil || len(st.Restrictions) != 1 {
+		t.Fatalf("complete state: %v %+v", err, st)
+	}
+	// The writer never emits what the reader refuses.
+	s, err := Open(dir, ctx, time.Hour, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add(epoch, Restriction{Rule: "network-denied", Decision: "pause", Type: "network", RunID: "run_a", EventID: "evt_1"}); err == nil {
+		t.Fatal("a restriction without a target was stored")
+	}
+	if _, err := s.Attempt(epoch, "rst_1", Link{At: epoch, RunID: "run_b", Type: "network", Target: "x", Correlation: "retry in a new run"}); err == nil {
+		t.Fatal("a trajectory step without an event ID was stored")
+	}
 	for name, body := range map[string]string{
 		"garbage":       "{not json",
 		"other context": `{"version":1,"context":{"operator_id":"human:mallory","project_id":"abc123","authorization_context_id":"dev-local"},"restrictions":[]}`,
 		// Parsing is not enough: a file without Watchdog's fields would
 		// otherwise be rewritten as an empty state, dropping every restriction.
-		"empty object":        "{}",
-		"no version":          `{"context":{"operator_id":"human:onno","project_id":"abc123","project":"demo","authorization_context_id":"dev-local"},"restrictions":[]}`,
-		"empty restriction":   `{` + own + `,"restrictions":[{}]}`,
-		"unknown decision":    `{` + own + `,"restrictions":[{"id":"rst_1","rule":"network-denied","decision":"warn","type":"network","target":"x","created":"2026-01-01T00:00:00Z","expires":"2027-01-01T00:00:00Z","attempts":1}]}`,
-		"restriction no time": `{` + own + `,"restrictions":[{"id":"rst_1","rule":"network-denied","decision":"pause","type":"network","target":"x","attempts":1}]}`,
+		"empty object":          "{}",
+		"no restrictions key":   `{` + own + `,"updated":"2026-01-01T00:00:00Z"}`,
+		"no updated time":       `{` + own + `,"restrictions":null}`,
+		"no version":            `{"context":{"operator_id":"human:onno","project_id":"abc123","project":"demo","authorization_context_id":"dev-local"},"restrictions":[]}`,
+		"empty restriction":     `{` + own + `,"updated":"2026-01-01T00:00:00Z","restrictions":[{}]}`,
+		"restriction no target": `{` + own + `,"updated":"2026-01-01T00:00:00Z","restrictions":[{"id":"rst_1","rule":"network-denied","decision":"pause","type":"network","run_id":"run_a","event_id":"evt_1","created":"2026-01-01T00:00:00Z","expires":"2027-01-01T00:00:00Z","attempts":1}]}`,
+		"incomplete link":       `{` + own + `,"updated":"2026-01-01T00:00:00Z","restrictions":[{"id":"rst_1","rule":"network-denied","decision":"pause","type":"network","target":"x","run_id":"run_a","event_id":"evt_1","created":"2026-01-01T00:00:00Z","expires":"2027-01-01T00:00:00Z","attempts":2,"related":[{}]}]}`,
+		"unknown decision":      `{` + own + `,"updated":"2026-01-01T00:00:00Z","restrictions":[{"id":"rst_1","rule":"network-denied","decision":"warn","type":"network","target":"x","run_id":"run_a","event_id":"evt_1","created":"2026-01-01T00:00:00Z","expires":"2027-01-01T00:00:00Z","attempts":1}]}`,
+		"restriction no time":   `{` + own + `,"updated":"2026-01-01T00:00:00Z","restrictions":[{"id":"rst_1","rule":"network-denied","decision":"pause","type":"network","target":"x","run_id":"run_a","event_id":"evt_1","attempts":1}]}`,
 	} {
 		if err := os.WriteFile(path, []byte(body), 0600); err != nil {
 			t.Fatal(err)
@@ -529,7 +554,7 @@ func TestConcurrentAttemptsAreCountedAtomically(t *testing.T) {
 				t.Error(err)
 				return
 			}
-			n, err := other.Attempt(epoch, id, Link{At: epoch, RunID: fmt.Sprintf("run_%d", i), Type: "network", Target: "deploy.example.com", Correlation: "retry in a new run"})
+			n, err := other.Attempt(epoch, id, Link{At: epoch, RunID: fmt.Sprintf("run_%d", i), EventID: fmt.Sprintf("evt_%d", i), Type: "network", Target: "deploy.example.com", Correlation: "retry in a new run"})
 			if err != nil {
 				t.Error(err)
 				return

@@ -40,7 +40,7 @@ Usage:
   saga-watchdog grant [--run ID] network <host> | tool <server/tool>
   saga-watchdog authority status | history | clear (--id ID | --all) --reason TEXT
   saga-watchdog check --type TYPE --action ACTION --target TARGET [--host H] [--runtime-type T] [--run ID]
-  saga-watchdog emit --type TYPE --action ACTION --target TARGET --result RESULT [--host H] [--runtime-type T] [--run ID]
+  saga-watchdog emit --type TYPE --action ACTION --target TARGET --result RESULT [--host H] [--runtime-type T] [--instance ID] [--run ID]
   saga-watchdog claude config | setup [--local] | remove [--local] | doctor
   saga-watchdog codex  config | setup | remove | doctor
   saga-watchdog gemini config | setup | remove | doctor
@@ -263,6 +263,7 @@ func query(g gitinfo.Info, op string, args []string) int {
 		f.StringVar(&input.RuntimeType, "runtime-type", "", "agent, worker, model-server or inference-endpoint")
 		if op == "emit" {
 			f.StringVar(&input.Result, "result", "", "observed result")
+			f.StringVar(&input.Instance, "instance", "", "instance an agent.instance.stop ends, as returned for its start")
 		}
 	}
 	if err := f.Parse(args); err != nil {
