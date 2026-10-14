@@ -255,8 +255,8 @@ own word never widens it:
   `allow_agents` never adds worker slots.
 - Every slot belongs to one instance ID, which the response to the start
   check (or to an unpaired start report) returns. The report the supervisor
-  pairs with that check, within the escalation window, confirms the slot
-  instead of taking another.
+  pairs with that check (same producer and action, within the escalation
+  window) confirms the slot instead of taking another.
 - A start reported as `failed`, `denied` or `blocked` releases its slot only
   when the report is paired with the check and comes from a trusted
   integration.

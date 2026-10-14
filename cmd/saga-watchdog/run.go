@@ -722,6 +722,8 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 				// Pair a report with the allowed check of its action before
 				// policy sees it: only a paired report confirms or releases
 				// that check's worker reservation.
+				// One producer's report never pairs with another's check.
+				producer, _ := e.Metadata["producer"].(string)
 				callID, _ := e.Metadata["tool_use_id"].(string)
 				hostKey, _ := e.Metadata["host_id"].(string)
 				runtimeKey, _ := e.Metadata["runtime_type"].(string)
@@ -731,7 +733,7 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 				if e.Type == "file" {
 					pairTarget = engine.LexicalFileTarget(e.Target)
 				}
-				actionKey := strings.Join([]string{e.Type, e.Action, pairTarget, callID, hostKey, runtimeKey}, "\x00")
+				actionKey := strings.Join([]string{producer, e.Type, e.Action, pairTarget, callID, hostKey, runtimeKey}, "\x00")
 				var prior pendingCheck
 				paired := false
 				if request.Operation == "emit" {
