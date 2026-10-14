@@ -52,27 +52,11 @@ type Engine struct {
 	// shellCounted records that the shell follow-up for the latest genuine
 	// denial has been counted; only a new denial makes the shell count again.
 	shellCounted bool
-	// workers holds the slot of each same-host worker, by target: reserved by
-	// an allowed pre-action check, or running once a report confirms it. A
-	// refused worker that reports it started anyway is running too, so the
-	// map can exceed replication.same_host_workers, up to maxWorkers.
-	workers map[string]slot
-	// untracked counts refused workers that started beyond maxWorkers. They
-	// hold budget until the run ends: fail closed.
-	untracked int
+	// workers holds one slot per same-host worker instance. A refused worker
+	// that reports it started anyway holds one too, so the ledger can exceed
+	// replication.same_host_workers.
+	workers workerLedger
 }
-
-// maxWorkers bounds tracked workers; beyond the configured budget every new
-// worker is refused anyway.
-const maxWorkers = 256
-
-// slot is the state of one worker slot.
-type slot int
-
-const (
-	reserved slot = iota + 1
-	running
-)
 
 // report tells a post-action report from a pre-action check. The supervisor
 // marks the operation; a check carries no result of its own.
@@ -110,7 +94,7 @@ func New(cfg config.Config, root string, controls ...string) *Engine {
 		effects[name] = append([]string(nil), patterns...)
 	}
 	cfg.Effects = effects
-	return &Engine{cfg: cfg, root: root, controls: append([]string(nil), controls...), grants: map[string]struct{}{}, workers: map[string]slot{}}
+	return &Engine{cfg: cfg, root: root, controls: append([]string(nil), controls...), grants: map[string]struct{}{}}
 }
 
 // Grant authorizes one network host or tool identifier for the rest of the
@@ -187,8 +171,8 @@ func (e *Engine) FileTarget(target string) string {
 // supervisor denies the check after all, for example on a persistent
 // trajectory. A slot taken earlier, or confirmed running, stays.
 func (e *Engine) Release(d Decision, target string) {
-	if d.Reserved && e.workers[target] == reserved {
-		delete(e.workers, target)
+	if d.Reserved {
+		e.workers.remove(target, reserved)
 	}
 }
 
@@ -285,51 +269,35 @@ func (e *Engine) Evaluate(ev event.Event) (d Decision) {
 	return d
 }
 
-// reserveWorker moves a worker slot through its states. An allowed check of a
-// new worker reserves a slot; the report that follows names the same worker
-// and confirms it as running. A start reported as failed, denied or blocked
-// releases only a reservation that is still unconfirmed, never the slot of a
-// worker that already runs. Only a successful stop report frees a running
-// slot (see replication).
+// reserveWorker moves worker slots through their states. An allowed check
+// reserves a new slot; the report that follows confirms one reservation of
+// its target as running. A start reported as failed, denied or blocked
+// releases only an unconfirmed reservation, never the slot of a worker that
+// already runs. A confirmed start without a reservation is a worker of its
+// own, counted even when policy refused it. Only a trusted successful stop
+// report frees a slot (see replication).
 func (e *Engine) reserveWorker(ev event.Event, d *Decision) {
 	runtimeType, _ := ev.Metadata["runtime_type"].(string)
 	remote, _ := ev.Metadata["remote"].(bool)
 	if runtimeType != "worker" || remote || !Expansion(ev.Type, ev.Action) {
 		return
 	}
-	confirmed := report(ev) && ev.Result != "failed" && ev.Result != "denied" && ev.Result != "blocked"
-	if d.Authorization != "replication.same_host_workers" {
-		// A worker policy refused but that reports it started anyway still
-		// runs: it occupies budget until a successful stop, so later checks
-		// account for every observed worker. Workers another rule
-		// authorizes (replication.allow_agents) use no budget.
-		switch {
-		case !confirmed || d.Authorization != "" || e.workers[ev.Target] != 0:
-		case len(e.workers) < maxWorkers:
-			e.workers[ev.Target] = running
-		default:
-			// Beyond the tracking bound a worker cannot be identified when it
-			// stops, so it holds budget for the rest of the run.
-			e.untracked++
-		}
-		return
-	}
-	state := e.workers[ev.Target]
+	budgeted := d.Authorization == "" || d.Authorization == "replication.same_host_workers"
 	switch {
 	case !report(ev):
 		// A check the supervisor already denied (a paused run) reserves
-		// nothing.
-		if state == 0 && ev.Result == "" && rank(d.Action) < rank("pause") {
-			e.workers[ev.Target] = reserved
+		// nothing; neither does one another rule authorized.
+		if d.Authorization == "replication.same_host_workers" && ev.Result == "" && rank(d.Action) < rank("pause") && e.workers.add(ev.Target, reserved) {
 			d.Reserved = true
 		}
 	case ev.Result == "failed" || ev.Result == "denied" || ev.Result == "blocked":
-		if state == reserved {
-			delete(e.workers, ev.Target)
-		}
-	default:
+		e.workers.remove(ev.Target, reserved)
+	case e.workers.promote(ev.Target):
+	case budgeted:
 		// The worker started, whatever this run decides about it now.
-		e.workers[ev.Target] = running
+		if !e.workers.add(ev.Target, running) {
+			e.workers.untracked++
+		}
 	}
 }
 
@@ -564,7 +532,9 @@ func (e *Engine) replication(ev event.Event) Decision {
 		// self-reported stop is recorded but frees nothing: the agent's own
 		// word never widens its budget.
 		if trust, _ := ev.Metadata["trust"].(string); report(ev) && ev.Result == "success" && trust != "self-reported" {
-			delete(e.workers, ev.Target)
+			if !e.workers.remove(ev.Target, running) {
+				e.workers.remove(ev.Target, reserved)
+			}
 		}
 		return decide("allow", "", "")
 	case "agent.instance.discovered", "inference.endpoint.discovered":
@@ -596,9 +566,11 @@ func (e *Engine) replication(ev event.Event) Decision {
 		}
 		return decide("pause", "unauthorized-agent-replication", "inference endpoint "+ev.Target+" is not listed in replication.inference_endpoints")
 	}
-	if held := e.workers[ev.Target] != 0; runtimeType == "worker" && (held || len(e.workers)+e.untracked < r.SameHostWorkers) {
-		inUse := len(e.workers) + e.untracked
-		if !held {
+	// A report confirming a reservation is that reserved worker; any other
+	// start, a second check under the same name included, needs a slot.
+	if pairs := report(ev) && e.workers.has(ev.Target, reserved); runtimeType == "worker" && (pairs || e.workers.inUse() < r.SameHostWorkers) {
+		inUse := e.workers.inUse()
+		if !pairs {
 			inUse++
 		}
 		return Decision{Action: "allow", Authorization: "replication.same_host_workers", Severity: "info", Reason: fmt.Sprintf("worker %s authorized by replication.same_host_workers (%d of %d)", ev.Target, inUse, r.SameHostWorkers)}

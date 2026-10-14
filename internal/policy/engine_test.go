@@ -641,3 +641,31 @@ func TestCanonicalFileTargetsAndRemoteHosts(t *testing.T) {
 		t.Fatalf("configured host with uppercase and trailing dot not matched: %+v", d)
 	}
 }
+
+// Workers sharing a target name each need and hold their own slot.
+func TestWorkersSharingANameHoldOneSlotEach(t *testing.T) {
+	cfg := config.Default()
+	cfg.Replication.SameHostWorkers = 2
+	start := func(result string, trust string) event.Event {
+		return event.Event{Timestamp: epoch, Type: "agent", Action: "instance.start", Target: "w", Result: result, Metadata: map[string]any{"host_id": "host_l", "remote": false, "runtime_type": "worker", "trust": trust}}
+	}
+	stop := event.Event{Timestamp: epoch, Type: "agent", Action: "instance.stop", Target: "w", Result: "success", Metadata: map[string]any{"host_id": "host_l", "remote": false, "runtime_type": "worker", "trust": "trusted-integration"}}
+	e := New(cfg, t.TempDir())
+	for i := range 2 {
+		if d := e.Evaluate(start("", "")); d.Authorization != "replication.same_host_workers" || !d.Reserved {
+			t.Fatalf("check %d: %+v", i, d)
+		}
+	}
+	if d := e.Evaluate(start("", "")); d.RuleID != "unauthorized-agent-replication" {
+		t.Fatalf("a third worker under the same name got a slot: %+v", d)
+	}
+	e.Evaluate(start("success", "trusted-integration"))
+	e.Evaluate(start("success", "trusted-integration"))
+	e.Evaluate(stop)
+	if d := e.Evaluate(start("", "")); d.Authorization != "replication.same_host_workers" {
+		t.Fatalf("one stop did not free one slot: %+v", d)
+	}
+	if d := e.Evaluate(start("", "")); d.RuleID != "unauthorized-agent-replication" {
+		t.Fatalf("one stop freed both slots: %+v", d)
+	}
+}

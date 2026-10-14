@@ -606,3 +606,59 @@ func TestObserveModeShowsTheTrajectoryItWouldEnforce(t *testing.T) {
 		t.Fatalf("observe mode changed persistent state: %d %s", code, text)
 	}
 }
+
+// When its authority state becomes unreadable the run stops and denies the
+// event instead of allowing it.
+func TestUnreadableAuthorityStateDenies(t *testing.T) {
+	root := fixture(t, authorityPolicy)
+	t.Setenv("SAGA_WATCHDOG_OPERATOR", "human:onno")
+	_, done, out, send := liveRun(t, root, "sleep 15")
+	if d := send("check", socket.Input{Type: "network", Action: "connect", Target: "deploy.example.com"}); d.Allowed {
+		t.Fatalf("denial: %+v", d.Decision)
+	}
+	matches, _ := filepath.Glob(filepath.Join(os.Getenv("SAGA_WATCHDOG_STATE_DIR"), "*", "contexts", "ctx_*.json"))
+	if len(matches) != 1 {
+		t.Fatalf("state files: %v", matches)
+	}
+	if err := os.WriteFile(matches[0], []byte("{not json, and longer than before so the size changes"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if d := send("check", socket.Input{Type: "network", Action: "connect", Target: "pypi.org"}); d.Allowed || d.Decision == nil || d.Decision.RuleID != "authority-state-failed" {
+		t.Fatalf("unreadable state did not deny: %+v %s", d, d.Error)
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("run did not stop: %s", out.String())
+	}
+}
+
+// Starts that differ only in runtime type keep their own instances.
+func TestRuntimeTypesKeepTheirInstances(t *testing.T) {
+	root := fixture(t, "version: 1\nmode: enforce\nrun:\n  max_duration: 20s\n  stop_grace_period: 50ms\nreplication:\n  same_host_workers: 1\n  allow_agents: [claude]\n")
+	r, done, out, send := liveRun(t, root, "sleep 15")
+	agent := socket.Input{Type: "agent", Action: "instance.start", Target: "claude", Producer: "saga-watchdog", RuntimeType: "agent"}
+	worker := agent
+	worker.RuntimeType = "worker"
+	a, w := send("check", agent), send("check", worker)
+	if a.Instance == nil || w.Instance == nil {
+		t.Fatalf("checks: %+v %+v", a.Decision, w.Decision)
+	}
+	worker.Result, agent.Result = "success", "success"
+	send("emit", worker)
+	send("emit", agent)
+	endRun(t, done, out, send)
+	events, _ := readEvents(t, root, r.ID)
+	for _, e := range events {
+		if e.Type != "agent" || e.Metadata["operation"] != "emit" {
+			continue
+		}
+		want := a.Instance.ID
+		if e.Metadata["runtime_type"] == "worker" {
+			want = w.Instance.ID
+		}
+		if e.Metadata["child_instance_id"] != want {
+			t.Fatalf("%v report took another start's instance: %v", e.Metadata["runtime_type"], e.Metadata)
+		}
+	}
+}

@@ -383,10 +383,15 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 		if authStore == nil {
 			return base, nil
 		}
+		// Without its authority state the run cannot know what applies: it
+		// stops, and the event is denied rather than allowed.
+		failed := func(reason string) (policy.Decision, *authority.Match) {
+			stop(reason, "authority-state-failed")
+			return policy.Decide("kill", "authority-state-failed", reason), nil
+		}
 		st, err := authStore.Current()
 		if err != nil {
-			stop("persistent authority state unreadable: "+err.Error(), "authority-state-failed")
-			return base, nil
+			return failed("persistent authority state unreadable: " + err.Error())
 		}
 		m, ok := st.Correlate(attemptOf(*e), time.Now().UTC())
 		if !ok {
@@ -405,8 +410,7 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 			now := time.Now().UTC()
 			n, err := authStore.Attempt(now, m.Restriction.ID, authority.Link{At: now, RunID: r.ID, EventID: e.ID, InstanceID: inst.ID, SessionID: a.SessionID, HostID: a.HostID, Type: e.Type, Target: a.Target, Correlation: m.Correlation})
 			if err != nil {
-				stop("cannot persist authority state: "+err.Error(), "authority-state-failed")
-				return base, nil
+				return failed("cannot persist authority state: " + err.Error())
 			}
 			if n == 0 {
 				return base, nil // the restriction ended meanwhile
@@ -723,7 +727,8 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 				// is the only evidence of its action and is correlated.
 				callID, _ := e.Metadata["tool_use_id"].(string)
 				hostKey, _ := e.Metadata["host_id"].(string)
-				actionKey := strings.Join([]string{e.Type, e.Action, canonical(e), callID, hostKey}, "\x00")
+				runtimeKey, _ := e.Metadata["runtime_type"].(string)
+				actionKey := strings.Join([]string{e.Type, e.Action, canonical(e), callID, hostKey, runtimeKey}, "\x00")
 				var prior pendingCheck
 				paired := false
 				if request.Operation == "emit" {

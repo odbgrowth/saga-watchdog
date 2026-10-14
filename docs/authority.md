@@ -101,7 +101,9 @@ atomically under a file lock so a parent run and a nested child run can share
 it. It holds at most 256 unresolved restrictions. A full state evicts
 nothing: a new restriction is refused, the refusal is audited and the run
 stops, until expiry or an operator makes room. A file that cannot be read
-safely stops the run from starting; it is never silently replaced.
+safely stops the run from starting; it is never silently replaced. If the
+state cannot be read or written during a run, the run stops and the event
+that met the failure is denied (`authority-state-failed`).
 
 Restrictions end only through:
 
@@ -243,9 +245,9 @@ replication:
 | Agent instance discovered without known provenance | Warn (`unattributed-agent-instance`) |
 | Network traffic to another host | Not replication; network rules apply |
 
-The worker budget counts instances by target: report each worker under its
-own name. A pre-action check and the report that follows it name the same
-worker and take one slot. A start reported as `failed`, `denied` or `blocked`
+The worker budget counts worker instances. Every allowed start check takes
+a slot, also for a name that is already running; the report that follows a
+check confirms that check's slot instead of taking another. A start reported as `failed`, `denied` or `blocked`
 did not happen and releases its slot. Only a successful stop report
 (`emit --type agent --action instance.stop --result success`) of a counted
 worker from a trusted integration frees a slot; the check before a stop, a
