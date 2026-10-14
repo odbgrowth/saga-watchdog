@@ -54,4 +54,15 @@ func TestPendingChecks(t *testing.T) {
 	if c, ok := p.take("worker", now.Add(time.Second), "trusted-integration"); !ok || c.instance != first {
 		t.Fatalf("a reserved worker check was dropped when full: %v %+v", ok, c)
 	}
+	// It never expires either: a late report still confirms its reservation,
+	// while an unreserved check of the same age is gone.
+	p = newPendingChecks(time.Minute, 3)
+	p.add("worker", now, "trusted-integration", second, true)
+	p.add("worker", now, "trusted-integration", first, false)
+	if c, ok := p.take("worker", now.Add(time.Hour), "trusted-integration"); !ok || c.instance != second {
+		t.Fatalf("a late report lost its reserved check: %v %+v", ok, c)
+	}
+	if _, ok := p.take("worker", now.Add(time.Hour), "trusted-integration"); ok || p.count != 0 {
+		t.Fatalf("an expired unreserved check paired or stayed: %d", p.count)
+	}
 }

@@ -15,8 +15,10 @@ import (
 // expire after the window, so an abandoned check never pairs with a later
 // action. The total is bounded; a check beyond it pairs with nothing, and its
 // report then counts as its own action: once more, never less. A check that
-// holds a worker reservation is always kept, so its report confirms that
-// reservation; the worker ledger bounds those.
+// holds a worker reservation is always kept and never expires, so its report,
+// however late, confirms or releases that reservation; the worker ledger
+// bounds those. Releasing the reservation on expiry instead would free budget
+// for a worker that runs without reporting.
 type pendingChecks struct {
 	window time.Duration
 	max    int
@@ -28,6 +30,7 @@ type pendingCheck struct {
 	at       time.Time
 	trust    string
 	instance *authority.Instance
+	reserved bool
 }
 
 func newPendingChecks(window time.Duration, max int) *pendingChecks {
@@ -43,7 +46,7 @@ func (p *pendingChecks) add(key string, now time.Time, trust string, instance *a
 	if p.count >= p.max && !reserved {
 		return
 	}
-	p.queues[key] = append(p.queues[key], pendingCheck{at: now, trust: trust, instance: instance})
+	p.queues[key] = append(p.queues[key], pendingCheck{at: now, trust: trust, instance: instance, reserved: reserved})
 	p.count++
 }
 
@@ -66,17 +69,20 @@ func (p *pendingChecks) take(key string, now time.Time, trust string) (pendingCh
 	return pendingCheck{}, false
 }
 
-// expire drops the checks of key older than the window; a queue is in time
-// order.
+// expire drops the checks of key older than the window, except those that
+// hold a worker reservation.
 func (p *pendingChecks) expire(key string, now time.Time) {
-	q := p.queues[key]
-	for len(q) > 0 && now.Sub(q[0].at) > p.window {
-		q = q[1:]
-		p.count--
+	var kept []pendingCheck
+	for _, c := range p.queues[key] {
+		if !c.reserved && now.Sub(c.at) > p.window {
+			p.count--
+			continue
+		}
+		kept = append(kept, c)
 	}
-	if len(q) == 0 {
+	if len(kept) == 0 {
 		delete(p.queues, key)
 	} else {
-		p.queues[key] = q
+		p.queues[key] = kept
 	}
 }
