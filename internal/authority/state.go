@@ -473,10 +473,39 @@ func QuarantineCorrupt(dir string, ctx Context, who, reason string) (string, err
 	defer unlock()
 	now := time.Now().UTC()
 	moved := s.path + ".corrupt-" + now.Format("20060102T150405Z")
-	if err := os.Rename(s.path, moved); err != nil {
+	// Keep a copy aside first, then replace the corrupt state with a fresh
+	// one that carries the audit record of this clear, in one atomic write:
+	// the clear and its record commit together, as in update.
+	if err := copyFile(s.path, moved); err != nil {
 		return "", err
 	}
-	return moved, s.audit(now, "cleared", Restriction{ID: "all", Type: "state", Target: filepath.Base(moved)}, who, "corrupt state moved aside: "+reason)
+	record := s.record(now, "cleared", Restriction{ID: "all", Type: "state", Target: filepath.Base(moved)}, who, "corrupt state moved aside: "+reason)
+	st := State{Version: 1, Context: ctx, Updated: now, PendingAudit: []event.Event{record}}
+	if err := s.write(st); err != nil {
+		return "", err
+	}
+	if err := s.appendLog(record); err != nil {
+		return moved, err
+	}
+	st.PendingAudit = nil
+	return moved, s.write(st)
+}
+
+// copyFile copies src to a new private file dst.
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return err
+	}
+	if _, err = io.Copy(out, in); err == nil {
+		err = out.Sync()
+	}
+	return errors.Join(err, out.Close())
 }
 
 // audit appends one context-level event outside a state update.

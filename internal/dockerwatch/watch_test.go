@@ -381,3 +381,45 @@ func boolInt(b bool) int {
 	}
 	return 0
 }
+
+// More running agent containers than the listing bound are reported as a
+// number in history and status, never dropped silently.
+func TestDiscoveryReportsContainersBeyondTheBound(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.AgentImages = []AgentImage{{Image: "ghcr.io/acme/agent", RuntimeType: "agent"}}
+	c := fixtureClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/version":
+			fmt.Fprint(w, `{"ApiVersion":"1.56","MinAPIVersion":"1.44"}`)
+		case "/v1.56/containers/json":
+			var items []string
+			for n := 1; n <= maxImageContainers+44; n++ {
+				items = append(items, fmt.Sprintf(`{"Id":"%064x"}`, n))
+			}
+			fmt.Fprint(w, "["+strings.Join(items, ",")+"]")
+		case "/v1.56/containers/" + testID + "/json":
+			fmt.Fprintf(w, `{"Id":%q,"State":{"Status":"running"}}`, testID)
+		case "/v1.56/containers/" + testID + "/stats":
+			fmt.Fprintf(w, `{"id":%q,"read":"2026-10-14T09:00:00Z","memory_stats":{"usage":1,"limit":2}}`, testID)
+		default:
+			w.WriteHeader(404)
+		}
+	})
+	if err := Run(context.Background(), cfg, c, true); err != nil {
+		t.Fatal(err)
+	}
+	var b strings.Builder
+	if err := CopyHistory(cfg.StateDir, &b); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(b.String(), `"action":"instance.discovered"`); got != maxImageContainers {
+		t.Fatalf("%d containers reported individually", got)
+	}
+	if !strings.Contains(b.String(), "44 more running containers") {
+		t.Fatalf("overflow not reported: %s", b.String())
+	}
+	s, err := ReadSnapshot(cfg)
+	if err != nil || len(s.Discovered) != maxListedDiscoveries || s.DiscoveredTotal != maxImageContainers+44 {
+		t.Fatalf("snapshot: %v listed %d of %d", err, len(s.Discovered), s.DiscoveredTotal)
+	}
+}

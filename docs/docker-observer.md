@@ -153,7 +153,8 @@ agent_images:
 Configure at most 16 images by plain reference; the match uses Docker's
 `ancestor` filter. Status lists up to 64 running discovered containers under
 `discovered_agents`, with their number in `discovered_agents_total`; the
-history records every discovery.
+history records every discovery. More than 256 running containers of one
+image are reported as a count in history and in the total.
 
 Discovery stays observation-only. It never stops, pauses, restarts or removes a
 container, and a discovered container is not adopted as a target. An image

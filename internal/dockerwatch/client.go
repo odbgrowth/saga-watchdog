@@ -178,23 +178,32 @@ func (c *Client) Stats(ctx context.Context, api, id string) (Stats, error) {
 }
 
 // ContainersOfImage lists the full IDs of running containers created from an
-// image (Docker's ancestor filter). It is a read; nothing is changed.
-func (c *Client) ContainersOfImage(ctx context.Context, api, image string) ([]string, error) {
+// image (Docker's ancestor filter): at most maxImageContainers IDs, and the
+// number of valid IDs in total. It is a read; nothing is changed.
+func (c *Client) ContainersOfImage(ctx context.Context, api, image string) ([]string, int, error) {
 	filter, _ := json.Marshal(map[string][]string{"ancestor": {image}, "status": {"running"}})
 	var list []struct {
 		ID string `json:"Id"`
 	}
 	if err := c.read(ctx, api+"/containers/json?"+url.Values{"filters": {string(filter)}}.Encode(), &list); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	var ids []string
+	total := 0
 	for _, item := range list {
-		if fullID.MatchString(item.ID) && len(ids) < 256 {
+		if !fullID.MatchString(item.ID) {
+			continue
+		}
+		total++
+		if len(ids) < maxImageContainers {
 			ids = append(ids, item.ID)
 		}
 	}
-	return ids, nil
+	return ids, total, nil
 }
+
+// maxImageContainers bounds the containers tracked per agent image.
+const maxImageContainers = 256
 
 type DockerEvent struct {
 	Type   string `json:"Type"`

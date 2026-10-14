@@ -421,3 +421,46 @@ func TestAuditRecordsSurviveALogFailure(t *testing.T) {
 		t.Fatalf("flushed records still pending: %+v", st.PendingAudit)
 	}
 }
+
+// Quarantining corrupt state commits its audit record with the fresh state:
+// a failing log leaves it pending for the next update, never lost.
+func TestQuarantineAuditSurvivesALogFailure(t *testing.T) {
+	dir := t.TempDir()
+	ctx := testContext()
+	if err := os.MkdirAll(filepath.Join(dir, "contexts"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "contexts", ctx.ID()+".json")
+	if err := os.WriteFile(path, []byte("{not json"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	log := filepath.Join(dir, "contexts", ctx.ID()+".events.jsonl")
+	if err := os.Mkdir(log, 0700); err != nil {
+		t.Fatal(err)
+	}
+	moved, err := QuarantineCorrupt(dir, ctx, "human:onno", "restore after disk error")
+	if err == nil {
+		t.Fatal("quarantine reported success without its audit record")
+	}
+	if data, _ := os.ReadFile(moved); string(data) != "{not json" {
+		t.Fatalf("corrupt state not kept aside: %q", data)
+	}
+	st, err := Peek(dir, ctx)
+	if err != nil || len(st.PendingAudit) != 1 || st.PendingAudit[0].Action != "cleared" {
+		t.Fatalf("quarantine record not pending: %v %+v", err, st)
+	}
+	if err := os.Remove(log); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(dir, ctx, time.Hour, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add(epoch, Restriction{Rule: "network-denied", Decision: "pause", Type: "network", Target: "x.example", RunID: "run_a", EventID: "evt_1"}); err != nil {
+		t.Fatal(err)
+	}
+	var history strings.Builder
+	if err := History(dir, ctx, &history); err != nil || !strings.Contains(history.String(), "corrupt state moved aside") {
+		t.Fatalf("quarantine record lost: %v %s", err, history.String())
+	}
+}

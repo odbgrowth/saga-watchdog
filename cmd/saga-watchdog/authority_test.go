@@ -435,3 +435,71 @@ func TestTrustedReportsAndEscalatedKillsPersist(t *testing.T) {
 		}
 	}
 }
+
+// Concurrent starts of one agent keep their own instances: by call ID, or in
+// order for producers without one.
+func TestConcurrentStartsKeepTheirInstances(t *testing.T) {
+	root := fixture(t, "version: 1\nmode: enforce\nrun:\n  max_duration: 20s\n  stop_grace_period: 50ms\nreplication:\n  allow_agents: [claude]\n")
+	r, done, out, send := liveRun(t, root, "sleep 15")
+	start := func(call string) socket.Input {
+		return socket.Input{Type: "agent", Action: "instance.start", Target: "claude", Producer: "saga-watchdog", CallID: call}
+	}
+	assigned := map[string]string{}
+	for _, call := range []string{"call-1", "call-2", "", ""} {
+		d := send("check", start(call))
+		if !d.Allowed || d.Instance == nil {
+			t.Fatalf("check %q: %+v", call, d.Decision)
+		}
+		if call == "" {
+			call = "anon-" + string(rune('a'+len(assigned)-2))
+		}
+		assigned[call] = d.Instance.ID
+	}
+	for _, call := range []string{"call-2", "call-1", "", ""} {
+		report := start(call)
+		report.Result = "success"
+		send("emit", report)
+	}
+	endRun(t, done, out, send)
+	events, _ := readEvents(t, root, r.ID)
+	var reports []map[string]any
+	for _, e := range events {
+		if e.Type == "agent" && e.Metadata["operation"] == "emit" {
+			reports = append(reports, e.Metadata)
+		}
+	}
+	want := []string{assigned["call-2"], assigned["call-1"], assigned["anon-a"], assigned["anon-b"]}
+	if len(reports) != 4 {
+		t.Fatalf("reports: %v", reports)
+	}
+	for i, m := range reports {
+		if m["child_instance_id"] != want[i] {
+			t.Fatalf("report %d named %v, its check was given %s", i, m["child_instance_id"], want[i])
+		}
+	}
+}
+
+// A check pairs with its report only within the escalation window; a report
+// after that counts as its own action.
+func TestReportPairsExpireAfterTheWindow(t *testing.T) {
+	root := fixture(t, authorityPolicy+"replication:\n  allow_agents: [claude]\nescalation:\n  window: 1s\n")
+	t.Setenv("SAGA_WATCHDOG_OPERATOR", "human:onno")
+	_, doneA, outA, sendA := liveRun(t, root, "sleep 15")
+	sendA("check", socket.Input{Type: "network", Action: "connect", Target: "deploy.example.com"})
+	endRun(t, doneA, outA, sendA)
+
+	_, doneB, outB, sendB := liveRun(t, root, "sleep 15")
+	agent := socket.Input{Type: "agent", Action: "instance.start", Target: "claude", Producer: "saga-watchdog"}
+	if d := sendB("check", agent); !d.Allowed || d.Decision.RuleID != "authority-expansion-after-denial" {
+		t.Fatalf("authorized agent in a restricted context: %+v", d.Decision)
+	}
+	time.Sleep(1200 * time.Millisecond)
+	agent.Result = "success"
+	if d := sendB("emit", agent); d.Decision == nil || d.Decision.RuleID != "authority-expansion-after-denial" {
+		t.Fatalf("report after the window not correlated: %+v", d.Decision)
+	}
+	endRun(t, doneB, outB, sendB)
+	if code, text := runCLI(t, root, nil, "authority", "status"); code != 0 || !strings.Contains(text, "attempts 3") {
+		t.Fatalf("status %d: %s", code, text)
+	}
+}

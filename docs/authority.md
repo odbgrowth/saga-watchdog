@@ -131,9 +131,9 @@ context, is one of:
 | New agent instance, runtime, endpoint or host after a denial | Agent A denied, then starts agent B |
 
 Each action counts once. A trusted hook's post-action report that mirrors an
-allowed pre-action check of the same action is not counted again; a report
-without such a check, for example after a pre-hook failed open or a denied
-check, is counted.
+allowed pre-action check of the same action within the escalation window is
+not counted again; a report without such a check, for example after a
+pre-hook failed open or a denied check, is counted.
 
 Effects are how policy declares that different targets reach the same
 restricted outcome. Without them only same-target retries and new instances

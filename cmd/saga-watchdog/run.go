@@ -181,16 +181,18 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 	// Producer claims from a configured hook adapter, or from a nested
 	// saga-watchdog, are trusted-integration evidence; any other socket event
 	// is self-reported. Labels never grant authority.
-	// assigned holds the instance an allowed check gave a start until the
-	// report of that start names it. Bounded; a report beyond the bound gets
-	// an instance of its own.
+	// assigned holds, per start and call ID, the instances allowed checks
+	// gave, oldest first, until the reports of those starts name them.
+	// Bounded; a report beyond the bound gets an instance of its own.
 	const maxAssigned = 256
-	assigned := map[string]*authority.Instance{}
-	// checked holds pre-action checks until the trusted report of the same
-	// action arrives. Bounded; beyond it a report is correlated as well, which
-	// can count once more but never less.
+	assigned := map[string][]*authority.Instance{}
+	assignedCount := 0
+	// checked holds allowed pre-action checks until the trusted report of the
+	// same action arrives, for at most the escalation window. A report after
+	// that, or beyond the bound, is correlated as well: it can count once
+	// more but never less.
 	const maxChecked = 1024
-	checked := map[string]bool{}
+	checked := map[string]time.Time{}
 	trustedProducers := map[string]bool{"saga-watchdog": true}
 	for _, spec := range integrations.Specs {
 		for _, file := range spec.Files {
@@ -706,7 +708,8 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 				// is the only evidence of its action and is correlated.
 				callID, _ := e.Metadata["tool_use_id"].(string)
 				pair := strings.Join([]string{e.Type, canonical(e), callID}, "\x00")
-				mirrored := request.Operation == "emit" && trustOf(e) == "trusted-integration" && checked[pair]
+				at, paired := checked[pair]
+				mirrored := request.Operation == "emit" && trustOf(e) == "trusted-integration" && paired && time.Since(at) <= c.Escalation.Window
 				if request.Operation == "emit" {
 					delete(checked, pair)
 				}
@@ -719,8 +722,17 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 				}
 				allowed := permits(c.Mode, d) && !pausedCheck
 				// Only an allowed check is followed by a report of its action.
-				if request.Operation == "check" && allowed && len(checked) < maxChecked {
-					checked[pair] = true
+				if request.Operation == "check" && allowed {
+					if len(checked) >= maxChecked {
+						for key, at := range checked {
+							if time.Since(at) > c.Escalation.Window {
+								delete(checked, key)
+							}
+						}
+					}
+					if len(checked) < maxChecked {
+						checked[pair] = time.Now()
+					}
 				}
 				// The decision above used the submitted path. Record an absolute
 				// in-project path by its project-relative name for readability.
@@ -747,10 +759,15 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 					// The report of a start names the instance its check was
 					// assigned: one start is one instance. A later check is a
 					// new start and gets a new instance.
-					key := strings.Join([]string{hostID, e.Type, e.Action, e.Target}, "\x00")
-					if request.Operation == "emit" {
-						child = assigned[key]
-						delete(assigned, key)
+					key := strings.Join([]string{hostID, e.Type, e.Action, e.Target, callID}, "\x00")
+					if queue := assigned[key]; request.Operation == "emit" && len(queue) > 0 {
+						child = queue[0]
+						if len(queue) == 1 {
+							delete(assigned, key)
+						} else {
+							assigned[key] = queue[1:]
+						}
+						assignedCount--
 					}
 					if child == nil {
 						child = &authority.Instance{ID: authority.NewInstanceID(), ParentID: inst.ID, PrincipalID: "agent:" + e.Target, HostID: hostID, RuntimeType: runtimeType, Provenance: "unknown"}
@@ -764,8 +781,9 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 							}
 						}
 					}
-					if allowed && request.Operation == "check" && len(assigned) < maxAssigned {
-						assigned[key] = child
+					if allowed && request.Operation == "check" && assignedCount < maxAssigned {
+						assigned[key] = append(assigned[key], child)
+						assignedCount++
 					}
 				}
 				if child != nil {
