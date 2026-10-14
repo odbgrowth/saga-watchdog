@@ -134,9 +134,10 @@ func (s State) Correlate(a Attempt, now time.Time) (Match, bool) {
 		}
 		p, kind := 0, ""
 		switch {
-		case r.Type == a.Type && r.Target == target && r.RunID != a.RunID:
+		case r.Type == a.Type && r.Target == target && r.RunID == a.RunID:
 			// Retries inside the run that earned the restriction are the base
-			// rule's and the in-run window's concern.
+			// rule's and the in-run window's concern, by any correlation.
+		case r.Type == a.Type && r.Target == target:
 			p, kind = 3, "retry in a new run"
 		case shared(r.Effects, a.Effects) != "":
 			p, kind = 2, "alternate route to effect "+shared(r.Effects, a.Effects)

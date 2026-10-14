@@ -110,6 +110,7 @@ func TestRestrictionsPersistCorrelateExpireAndClear(t *testing.T) {
 	for name, a := range map[string]Attempt{
 		"unrelated download":        {Type: "network", Target: "pypi.org", RunID: "run_b"},
 		"same run retry":            {Type: "network", Target: "deploy.example.com", RunID: "run_a"},
+		"same run retry, effect":    {Type: "network", Target: "deploy.example.com", Effects: []string{"production.deploy"}, RunID: "run_a"},
 		"the denial event itself":   {Type: "network", Target: "deploy.example.com", RunID: "run_b", EventID: "evt_1"},
 		"unrelated tool, no effect": {Type: "tool", Target: "github/get_issue", RunID: "run_b"},
 		"worker stop":               {Type: "agent", Action: "instance.stop", Target: "codex", RunID: "run_b"},

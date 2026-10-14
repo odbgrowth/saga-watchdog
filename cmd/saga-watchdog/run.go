@@ -378,6 +378,7 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 	// trajectory continues restrictions earned earlier in the same trusted
 	// context: across runs, model sessions, agent instances and hosts. It only
 	// matches observable policy facts and never infers intent.
+	shadow := map[string]int{}
 	trajectory := func(e *event.Event, base policy.Decision) (policy.Decision, *authority.Match) {
 		if authStore == nil {
 			return base, nil
@@ -392,7 +393,12 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 			return base, nil
 		}
 		attempts := m.Restriction.Attempts + 1
-		if c.Mode == "enforce" {
+		if c.Mode != "enforce" {
+			// Observe mode persists nothing; a per-run shadow count shows the
+			// decisions enforce mode would take.
+			shadow[m.Restriction.ID]++
+			attempts = m.Restriction.Attempts + shadow[m.Restriction.ID]
+		} else {
 			// Count the step under the state lock: a parallel run in this
 			// context gets the next number, so no threshold is skipped.
 			a := attemptOf(*e)

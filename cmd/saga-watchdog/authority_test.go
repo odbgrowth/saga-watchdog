@@ -574,3 +574,35 @@ func TestCanonicalTargetsAcrossRunsAndGrants(t *testing.T) {
 		t.Fatalf("grant of a URL left its host restricted: %d %s", code, text)
 	}
 }
+
+// Observe mode persists nothing but counts correlated attempts per run, so it
+// shows the decisions enforce mode would take, up to the kill.
+func TestObserveModeShowsTheTrajectoryItWouldEnforce(t *testing.T) {
+	root := fixture(t, authorityPolicy)
+	t.Setenv("SAGA_WATCHDOG_OPERATOR", "human:onno")
+	// Trusted evidence: self-reported trajectory kills are capped at pause.
+	deploy := socket.Input{Type: "network", Action: "connect", Target: "deploy.example.com", Producer: "saga-watchdog"}
+	_, doneA, outA, sendA := liveRun(t, root, "sleep 15")
+	sendA("check", deploy)
+	endRun(t, doneA, outA, sendA)
+
+	if err := os.WriteFile(filepath.Join(root, ".saga-watchdog.yaml"), []byte(strings.Replace(authorityPolicy, "mode: enforce", "mode: observe", 1)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, doneB, outB, sendB := liveRun(t, root, "sleep 15")
+	var actions []string
+	for range 4 {
+		d := sendB("check", deploy)
+		if !d.Allowed || d.Decision == nil {
+			t.Fatalf("observe mode denied: %+v", d)
+		}
+		actions = append(actions, d.Decision.Action)
+	}
+	endRun(t, doneB, outB, sendB)
+	if actions[len(actions)-1] != "kill" {
+		t.Fatalf("observe mode never showed the kill enforce mode would take: %v", actions)
+	}
+	if code, text := runCLI(t, root, nil, "authority", "status"); code != 0 || !strings.Contains(text, "attempts 1") {
+		t.Fatalf("observe mode changed persistent state: %d %s", code, text)
+	}
+}
