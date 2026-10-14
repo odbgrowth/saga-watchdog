@@ -179,6 +179,10 @@ func Open(dir string, ctx Context, retention, serious time.Duration) (*Store, er
 	if !ctx.Complete() {
 		return nil, errors.New("security context is incomplete")
 	}
+	// Every restriction must expire after it was created.
+	if retention <= 0 || serious < retention {
+		return nil, errors.New("retention must be positive and at most serious retention")
+	}
 	dir = filepath.Join(dir, "contexts")
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, err
@@ -234,7 +238,8 @@ func (s *Store) valid(fields map[string]json.RawMessage, st State) bool {
 		return false
 	}
 	for _, r := range st.Restrictions {
-		if r.ID == "" || !restrictable(r) || r.Created.IsZero() || r.Expires.IsZero() || r.Attempts < 1 || len(r.Related) > maxRelated {
+		// The writer always expires a restriction after it was created.
+		if r.ID == "" || !restrictable(r) || r.Created.IsZero() || !r.Expires.After(r.Created) || r.Attempts < 1 || len(r.Related) > maxRelated {
 			return false
 		}
 		for _, l := range r.Related {

@@ -225,15 +225,16 @@ func TestCorruptStateIsRefusedNotReplaced(t *testing.T) {
 		"other context": `{"version":1,"context":{"operator_id":"human:mallory","project_id":"abc123","authorization_context_id":"dev-local"},"restrictions":[]}`,
 		// Parsing is not enough: a file without Watchdog's fields would
 		// otherwise be rewritten as an empty state, dropping every restriction.
-		"empty object":          "{}",
-		"no restrictions key":   `{` + own + `,"updated":"2026-01-01T00:00:00Z"}`,
-		"no updated time":       `{` + own + `,"restrictions":null}`,
-		"no version":            `{"context":{"operator_id":"human:onno","project_id":"abc123","project":"demo","authorization_context_id":"dev-local"},"restrictions":[]}`,
-		"empty restriction":     `{` + own + `,"updated":"2026-01-01T00:00:00Z","restrictions":[{}]}`,
-		"restriction no target": `{` + own + `,"updated":"2026-01-01T00:00:00Z","restrictions":[{"id":"rst_1","rule":"network-denied","decision":"pause","type":"network","run_id":"run_a","event_id":"evt_1","created":"2026-01-01T00:00:00Z","expires":"2027-01-01T00:00:00Z","attempts":1}]}`,
-		"incomplete link":       `{` + own + `,"updated":"2026-01-01T00:00:00Z","restrictions":[{"id":"rst_1","rule":"network-denied","decision":"pause","type":"network","target":"x","run_id":"run_a","event_id":"evt_1","created":"2026-01-01T00:00:00Z","expires":"2027-01-01T00:00:00Z","attempts":2,"related":[{}]}]}`,
-		"unknown decision":      `{` + own + `,"updated":"2026-01-01T00:00:00Z","restrictions":[{"id":"rst_1","rule":"network-denied","decision":"warn","type":"network","target":"x","run_id":"run_a","event_id":"evt_1","created":"2026-01-01T00:00:00Z","expires":"2027-01-01T00:00:00Z","attempts":1}]}`,
-		"restriction no time":   `{` + own + `,"updated":"2026-01-01T00:00:00Z","restrictions":[{"id":"rst_1","rule":"network-denied","decision":"pause","type":"network","target":"x","run_id":"run_a","event_id":"evt_1","attempts":1}]}`,
+		"empty object":           "{}",
+		"no restrictions key":    `{` + own + `,"updated":"2026-01-01T00:00:00Z"}`,
+		"no updated time":        `{` + own + `,"restrictions":null}`,
+		"no version":             `{"context":{"operator_id":"human:onno","project_id":"abc123","project":"demo","authorization_context_id":"dev-local"},"restrictions":[]}`,
+		"empty restriction":      `{` + own + `,"updated":"2026-01-01T00:00:00Z","restrictions":[{}]}`,
+		"restriction no target":  `{` + own + `,"updated":"2026-01-01T00:00:00Z","restrictions":[{"id":"rst_1","rule":"network-denied","decision":"pause","type":"network","run_id":"run_a","event_id":"evt_1","created":"2026-01-01T00:00:00Z","expires":"2027-01-01T00:00:00Z","attempts":1}]}`,
+		"incomplete link":        `{` + own + `,"updated":"2026-01-01T00:00:00Z","restrictions":[{"id":"rst_1","rule":"network-denied","decision":"pause","type":"network","target":"x","run_id":"run_a","event_id":"evt_1","created":"2026-01-01T00:00:00Z","expires":"2027-01-01T00:00:00Z","attempts":2,"related":[{}]}]}`,
+		"unknown decision":       `{` + own + `,"updated":"2026-01-01T00:00:00Z","restrictions":[{"id":"rst_1","rule":"network-denied","decision":"warn","type":"network","target":"x","run_id":"run_a","event_id":"evt_1","created":"2026-01-01T00:00:00Z","expires":"2027-01-01T00:00:00Z","attempts":1}]}`,
+		"expiry before creation": `{` + own + `,"updated":"2026-01-01T00:00:00Z","restrictions":[{"id":"rst_1","rule":"network-denied","decision":"pause","type":"network","target":"x","run_id":"run_a","event_id":"evt_1","created":"2026-01-01T00:00:00Z","expires":"2026-01-01T00:00:00Z","attempts":1}]}`,
+		"restriction no time":    `{` + own + `,"updated":"2026-01-01T00:00:00Z","restrictions":[{"id":"rst_1","rule":"network-denied","decision":"pause","type":"network","target":"x","run_id":"run_a","event_id":"evt_1","attempts":1}]}`,
 	} {
 		if err := os.WriteFile(path, []byte(body), 0600); err != nil {
 			t.Fatal(err)
@@ -337,7 +338,7 @@ func TestWorstCaseStateFitsTheReader(t *testing.T) {
 	st := State{Version: 1, Context: testContext(), Updated: epoch}
 	for range maxRestrictions {
 		r := Restriction{ID: event.NewID("rst"), Rule: "cross-host-authority-expansion", Decision: "kill", Type: "inference", Target: storedTarget(quoted(4096)), Effects: effects,
-			RunID: event.NewID("run"), EventID: event.NewID("evt"), InstanceID: NewInstanceID(), SessionID: quoted(128), HostID: quoted(253), Created: epoch, Expires: epoch, Attempts: 1 << 30}
+			RunID: event.NewID("run"), EventID: event.NewID("evt"), InstanceID: NewInstanceID(), SessionID: quoted(128), HostID: quoted(253), Created: epoch, Expires: epoch.Add(time.Hour), Attempts: 1 << 30}
 		for range maxRelated {
 			r.Related = append(r.Related, Link{At: epoch, RunID: event.NewID("run"), EventID: event.NewID("evt"), InstanceID: NewInstanceID(), SessionID: quoted(128), HostID: quoted(253), Type: "inference", Target: storedTarget(quoted(4096)), Correlation: "alternate route to effect " + effects[0]})
 		}

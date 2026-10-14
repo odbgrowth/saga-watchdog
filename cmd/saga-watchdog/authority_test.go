@@ -668,7 +668,7 @@ func TestRuntimeTypesKeepTheirInstances(t *testing.T) {
 // later worker under the same name.
 func TestStopsFreeTheInstanceTheyName(t *testing.T) {
 	root := fixture(t, "version: 1\nmode: enforce\nrun:\n  max_duration: 20s\n  stop_grace_period: 50ms\nreplication:\n  same_host_workers: 2\n")
-	_, done, out, send := liveRun(t, root, "sleep 15")
+	r, done, out, send := liveRun(t, root, "sleep 15")
 	start := socket.Input{Type: "agent", Action: "instance.start", Target: "runner", Producer: "saga-watchdog", RuntimeType: "worker"}
 	// started returns the new worker's instance and the slots in use with it.
 	started := func() (string, string) {
@@ -699,4 +699,15 @@ func TestStopsFreeTheInstanceTheyName(t *testing.T) {
 		t.Fatalf("a repeated stop of %s freed the slot of %s: %s", a, b, reason)
 	}
 	endRun(t, done, out, send)
+	// The audit names the instance each stop ended.
+	events, _ := readEvents(t, root, r.ID)
+	stopped := 0
+	for _, e := range events {
+		if e.Action == "instance.stop" && e.Metadata["stopped_instance_id"] == a {
+			stopped++
+		}
+	}
+	if stopped != 2 {
+		t.Fatalf("audit recorded %d stops of %s, want 2", stopped, a)
+	}
 }
