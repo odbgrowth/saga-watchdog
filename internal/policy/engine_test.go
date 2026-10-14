@@ -472,6 +472,34 @@ func TestReplicationRules(t *testing.T) {
 	if d := e.Evaluate(third); d.Authorization != "replication.same_host_workers" {
 		t.Fatalf("slot not freed after the refused worker stopped: %+v", d)
 	}
+	// The usual refused flow: the check is refused, the report that follows
+	// is escalated to kill after that denial, and the worker still counts.
+	e = New(cfg, t.TempDir())
+	e.Evaluate(worker)
+	e.Evaluate(report)
+	if d := e.Evaluate(other); d.RuleID != "unauthorized-agent-replication" {
+		t.Fatalf("refused check: %+v", d)
+	}
+	if d := e.Evaluate(refused); d.Action != "kill" {
+		t.Fatalf("report after the refusal: %+v", d)
+	}
+	e.Evaluate(stop("test-runner", "success"))
+	if d := e.Evaluate(third); d.Authorization == "replication.same_host_workers" {
+		t.Fatalf("a killed-but-running worker left the budget: %+v", d)
+	}
+	// Workers beyond the tracking bound hold budget for the rest of the run.
+	e = New(cfg, t.TempDir())
+	for i := range maxWorkers + 1 {
+		started := ev("agent", "instance.start", fmt.Sprintf("w-%d", i), "host_l", false, "worker")
+		started.Result = "success"
+		e.Evaluate(started)
+	}
+	for i := range maxWorkers {
+		e.Evaluate(stop(fmt.Sprintf("w-%d", i), "success"))
+	}
+	if d := e.Evaluate(third); d.Authorization == "replication.same_host_workers" {
+		t.Fatalf("an untracked running worker left the budget: %+v", d)
+	}
 	// A start that did not happen holds no slot: an isolated failed or denied
 	// report takes none, and a failed report after its check releases it.
 	for _, result := range []string{"failed", "denied", "blocked"} {

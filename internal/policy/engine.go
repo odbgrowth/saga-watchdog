@@ -50,6 +50,9 @@ type Engine struct {
 	// refused worker that reports it started anyway is running too, so the
 	// map can exceed replication.same_host_workers, up to maxWorkers.
 	workers map[string]slot
+	// untracked counts refused workers that started beyond maxWorkers. They
+	// hold budget until the run ends: fail closed.
+	untracked int
 }
 
 // maxWorkers bounds tracked workers; beyond the configured budget every new
@@ -158,7 +161,9 @@ func decide(action, rule, reason string) Decision {
 // Evaluate leaves observe/enforce handling to the supervisor: audit decisions
 // must retain the exact action that would have been applied in enforce mode.
 // Timestamp must be assigned by the supervisor, never accepted from a client.
-func (e *Engine) Evaluate(ev event.Event) Decision {
+func (e *Engine) Evaluate(ev event.Event) (d Decision) {
+	// Worker accounting follows every decision, whichever path returns it.
+	defer func() { e.reserveWorker(ev, d) }()
 	now := ev.Timestamp
 	if now.IsZero() {
 		now = time.Now()
@@ -237,12 +242,11 @@ func (e *Engine) Evaluate(ev event.Event) Decision {
 		denied = true
 	}
 	escalation := e.escalate(ev, now, denied)
-	d := base
+	d = base
 	if rank(escalation.Action) > rank(base.Action) || (base.RuleID == "" && escalation.RuleID != "") {
 		escalation.Authorization = base.Authorization
 		d = escalation
 	}
-	e.reserveWorker(ev, d)
 	return d
 }
 
@@ -264,8 +268,14 @@ func (e *Engine) reserveWorker(ev event.Event, d Decision) {
 		// runs: it occupies budget until a successful stop, so later checks
 		// account for every observed worker. Workers another rule
 		// authorizes (replication.allow_agents) use no budget.
-		if confirmed && d.Authorization == "" && e.workers[ev.Target] == 0 && len(e.workers) < maxWorkers {
+		switch {
+		case !confirmed || d.Authorization != "" || e.workers[ev.Target] != 0:
+		case len(e.workers) < maxWorkers:
 			e.workers[ev.Target] = running
+		default:
+			// Beyond the tracking bound a worker cannot be identified when it
+			// stops, so it holds budget for the rest of the run.
+			e.untracked++
 		}
 		return
 	}
@@ -548,8 +558,8 @@ func (e *Engine) replication(ev event.Event) Decision {
 		}
 		return decide("pause", "unauthorized-agent-replication", "inference endpoint "+ev.Target+" is not listed in replication.inference_endpoints")
 	}
-	if held := e.workers[ev.Target] != 0; runtimeType == "worker" && (held || len(e.workers) < r.SameHostWorkers) {
-		inUse := len(e.workers)
+	if held := e.workers[ev.Target] != 0; runtimeType == "worker" && (held || len(e.workers)+e.untracked < r.SameHostWorkers) {
+		inUse := len(e.workers) + e.untracked
 		if !held {
 			inUse++
 		}

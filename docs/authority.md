@@ -243,7 +243,8 @@ did not happen and releases its slot. Only a successful stop report
 worker frees a slot; the check before a stop, or a failed stop, does not.
 A failed report never frees the slot of a worker that already runs. A
 worker that policy refused but that reports it started anyway occupies
-budget too, until its successful stop. The
+budget too, until its successful stop. Watchdog tracks up to 256 workers by
+name; a refused worker beyond that holds budget until the run ends. The
 check of a start and its report also name one instance ID.
 Stopping or discovering an instance never counts as an expansion.
 
