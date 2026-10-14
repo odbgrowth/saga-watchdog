@@ -14,7 +14,9 @@ import (
 	"github.com/odbgrowth/saga-watchdog/internal/event"
 )
 
-var epoch = time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC)
+// epoch follows the real clock: Open prunes with the current time, so a
+// fixed date would expire the tests' restrictions once it is in the past.
+var epoch = time.Now().UTC().Truncate(time.Second)
 
 func testContext() Context {
 	return Context{OperatorID: "human:onno", ProjectID: "abc123", Project: "demo", AuthorizationContextID: "dev-local"}
