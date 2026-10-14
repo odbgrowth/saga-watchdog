@@ -148,6 +148,11 @@ func (s *Snapshot) Refresh(c Config, now time.Time) {
 		for i := range s.Targets {
 			s.Targets[i].Availability = "unknown"
 		}
+		// Nothing discovered is verified any longer either.
+		s.Discovered, s.DiscoveredTotal, s.DiscoveryUnknown = nil, 0, nil
+		for _, img := range c.AgentImages {
+			s.DiscoveryUnknown = append(s.DiscoveryUnknown, img.Image)
+		}
 	}
 }
 

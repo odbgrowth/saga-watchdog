@@ -245,22 +245,30 @@ replication:
 | Agent instance discovered without known provenance | Warn (`unattributed-agent-instance`) |
 | Network traffic to another host | Not replication; network rules apply |
 
-The worker budget counts worker instances, and `allow_agents` never adds
-worker slots. Every allowed start check takes a slot, also for a name that
-is already running; the report the supervisor pairs with that check
-confirms its slot instead of taking another, and only such a paired report
-from a trusted integration can release it. A start reported as `failed`, `denied` or `blocked`
-did not happen and releases its slot. Only a successful stop report
-(`emit --type agent --action instance.stop --result success`) of a counted
-worker from a trusted integration frees a slot; the check before a stop, a
-failed stop or a self-reported stop does not, so a self-reported worker
-holds its slot until the run ends.
-A failed report never frees the slot of a worker that already runs. A
-worker that policy refused but that reports it started anyway occupies
-budget too, until its successful stop. Watchdog tracks up to 256 workers by
-name; a refused worker beyond that holds budget until the run ends. The
-check of a start and its report also name one instance ID.
-Stopping or discovering an instance never counts as an expansion.
+The worker budget (`same_host_workers`) counts worker instances. The agent's
+own word never widens it:
+
+- Every allowed start check takes a slot, also for a name that already runs.
+  `allow_agents` never adds worker slots.
+- The report the supervisor pairs with that check, within the escalation
+  window, confirms the slot instead of taking another. The check and its
+  report also name one instance ID.
+- A start reported as `failed`, `denied` or `blocked` releases its slot only
+  when the report is paired with the check and comes from a trusted
+  integration.
+- A trusted successful stop report
+  (`emit --type agent --action instance.stop --result success`) frees the slot
+  of one running worker of that name. It never releases an unconfirmed
+  reservation. The check before a stop, a failed stop and a self-reported
+  stop free nothing.
+- A worker that policy refused but that reports it started anyway takes a
+  slot too, until its trusted stop.
+- Watchdog tracks up to 256 workers; a refused worker beyond that holds
+  budget until the run ends.
+- Stopping or discovering an instance never counts as an expansion.
+
+A worker known only from the agent's own reports therefore holds its slot
+until the run ends.
 
 Watchdog stops only the run it supervises. It has no remote kill capability.
 

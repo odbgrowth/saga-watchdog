@@ -157,6 +157,8 @@ history records every discovery. A container that matches several configured
 images counts once, and a selected target never counts. An image whose
 containers could not be listed in the latest poll appears under
 `discovery_unknown`, and its earlier containers are not shown as running.
+A stale status, from an observer that stopped updating, lists every
+configured image there.
 
 Discovery stays observation-only. It never stops, pauses, restarts or removes a
 container, and a discovered container is not adopted as a target. An image

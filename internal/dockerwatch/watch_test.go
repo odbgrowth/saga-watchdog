@@ -272,6 +272,13 @@ func TestStatusCannotRemainFreshAfterCrash(t *testing.T) {
 	if s.Observer != "stale" || s.Targets[0].Availability != "unknown" {
 		t.Fatal(s)
 	}
+	// Discoveries are no longer verified either.
+	c.AgentImages = []AgentImage{{Image: "ghcr.io/acme/agent", RuntimeType: "agent"}}
+	s = Snapshot{Observer: "running", UpdatedAt: time.Now().Add(-time.Minute), Discovered: []string{strings.Repeat("b", 64)}, DiscoveredTotal: 1}
+	s.Refresh(c, time.Now())
+	if len(s.Discovered) != 0 || s.DiscoveredTotal != 0 || len(s.DiscoveryUnknown) != 1 {
+		t.Fatalf("stale discoveries shown as running: %+v", s)
+	}
 }
 
 // Tests 22-24: only containers of configured agent images that nobody

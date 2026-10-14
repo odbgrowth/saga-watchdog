@@ -545,10 +545,10 @@ func (e *Engine) replication(ev event.Event) Decision {
 		// a pre-action check or a failed stop leaves the worker running. A
 		// self-reported stop is recorded but frees nothing: the agent's own
 		// word never widens its budget.
+		// A stop ends a running worker; it never touches an outstanding
+		// reservation, which only its own paired report can release.
 		if trust, _ := ev.Metadata["trust"].(string); report(ev) && ev.Result == "success" && trust != "self-reported" {
-			if !e.workers.remove(ev.Target, running) {
-				e.workers.remove(ev.Target, reserved)
-			}
+			e.workers.remove(ev.Target, running)
 		}
 		return decide("allow", "", "")
 	case "agent.instance.discovered", "inference.endpoint.discovered":

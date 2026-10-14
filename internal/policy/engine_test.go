@@ -429,6 +429,7 @@ func TestReplicationRules(t *testing.T) {
 	}
 	e = New(cfg, t.TempDir())
 	e.Evaluate(worker)
+	e.Evaluate(report)
 	e.Evaluate(stop("test-runner", "success"))
 	if d := e.Evaluate(other); d.Action != "allow" {
 		t.Fatalf("stopped worker slot not freed: %+v", d)
@@ -450,6 +451,7 @@ func TestReplicationRules(t *testing.T) {
 	// A self-reported stop frees nothing; a trusted one does.
 	e = New(cfg, t.TempDir())
 	e.Evaluate(worker)
+	e.Evaluate(report)
 	claimed := stop("test-runner", "success")
 	claimed.Metadata["trust"] = "self-reported"
 	e.Evaluate(claimed)
@@ -686,6 +688,15 @@ func TestWorkersSharingANameHoldOneSlotEach(t *testing.T) {
 	}
 	if d := e.Evaluate(start("", "")); d.RuleID != "unauthorized-agent-replication" {
 		t.Fatalf("one stop freed both slots: %+v", d)
+	}
+	// A stop with no running worker of its name never releases an
+	// outstanding reservation: only that check's paired report can.
+	e = New(cfg, t.TempDir())
+	e.Evaluate(start("", ""))
+	e.Evaluate(start("", ""))
+	e.Evaluate(stop)
+	if d := e.Evaluate(start("", "")); d.RuleID != "unauthorized-agent-replication" {
+		t.Fatalf("a stop released a reservation: %+v", d)
 	}
 }
 
