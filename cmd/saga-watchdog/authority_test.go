@@ -482,7 +482,7 @@ func TestConcurrentStartsKeepTheirInstances(t *testing.T) {
 // A check pairs with its report only within the escalation window; a report
 // after that counts as its own action.
 func TestReportPairsExpireAfterTheWindow(t *testing.T) {
-	root := fixture(t, authorityPolicy+"replication:\n  allow_agents: [claude]\nescalation:\n  window: 1s\n")
+	root := fixture(t, authorityPolicy+"replication:\n  allow_agents: [claude]\nescalation:\n  window: 1s\n  kill_after: 10\n")
 	t.Setenv("SAGA_WATCHDOG_OPERATOR", "human:onno")
 	_, doneA, outA, sendA := liveRun(t, root, "sleep 15")
 	sendA("check", socket.Input{Type: "network", Action: "connect", Target: "deploy.example.com"})
@@ -490,16 +490,28 @@ func TestReportPairsExpireAfterTheWindow(t *testing.T) {
 
 	_, doneB, outB, sendB := liveRun(t, root, "sleep 15")
 	agent := socket.Input{Type: "agent", Action: "instance.start", Target: "claude", Producer: "saga-watchdog"}
-	if d := sendB("check", agent); !d.Allowed || d.Decision.RuleID != "authority-expansion-after-denial" {
-		t.Fatalf("authorized agent in a restricted context: %+v", d.Decision)
+	// Two concurrent starts without call IDs (as from Gemini): each report
+	// pairs with one check, so neither counts again.
+	for range 2 {
+		if d := sendB("check", agent); !d.Allowed || d.Decision.RuleID != "authority-expansion-after-denial" {
+			t.Fatalf("authorized agent in a restricted context: %+v", d.Decision)
+		}
 	}
+	report := agent
+	report.Result = "success"
+	for range 2 {
+		if d := sendB("emit", report); d.Decision == nil || d.Decision.RuleID == "authority-expansion-after-denial" {
+			t.Fatalf("paired report counted again: %+v", d.Decision)
+		}
+	}
+	// A check whose report comes after the window pairs with nothing.
+	sendB("check", agent)
 	time.Sleep(1200 * time.Millisecond)
-	agent.Result = "success"
-	if d := sendB("emit", agent); d.Decision == nil || d.Decision.RuleID != "authority-expansion-after-denial" {
+	if d := sendB("emit", report); d.Decision == nil || d.Decision.RuleID != "authority-expansion-after-denial" {
 		t.Fatalf("report after the window not correlated: %+v", d.Decision)
 	}
 	endRun(t, doneB, outB, sendB)
-	if code, text := runCLI(t, root, nil, "authority", "status"); code != 0 || !strings.Contains(text, "attempts 3") {
-		t.Fatalf("status %d: %s", code, text)
+	if code, text := runCLI(t, root, nil, "authority", "status"); code != 0 || !strings.Contains(text, "attempts 5") {
+		t.Fatalf("want the denial, three checks and the late report: %d %s", code, text)
 	}
 }

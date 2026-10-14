@@ -62,24 +62,10 @@ const maxListedDiscoveries = 64
 
 // discovery tracks, per configured image, the running containers nobody
 // selected. A container is reported when it appears; one that stops and later
-// runs again is reported again. Memory is bounded by the listing limit per
-// image and the number of configured images.
+// runs again is reported again. Memory is bounded by Docker's 4 MiB response
+// limit per image and the number of configured images.
 type discovery struct {
 	running map[string]map[string]bool
-	// omitted counts, per image, running containers beyond the listing
-	// bound. They are reported as a number, never dropped silently.
-	omitted map[string]int
-}
-
-// omit records how many containers of image were beyond the listing bound
-// and reports whether that number changed.
-func (d *discovery) omit(image string, n int) bool {
-	if d.omitted == nil {
-		d.omitted = map[string]int{}
-	}
-	changed := d.omitted[image] != n
-	d.omitted[image] = n
-	return changed
 }
 
 // observe replaces the running set of image and returns the containers that
@@ -125,11 +111,7 @@ func (d *discovery) list() ([]string, int) {
 		ids = append(ids, id)
 	}
 	slices.Sort(ids)
-	total := len(ids)
-	for _, n := range d.omitted {
-		total += n
-	}
-	return ids[:min(len(ids), maxListedDiscoveries)], total
+	return ids[:min(len(ids), maxListedDiscoveries)], len(ids)
 }
 
 // Freshness is computed by readers, so a crashed observer cannot leave an
@@ -353,7 +335,7 @@ func Run(ctx context.Context, cfg Config, client *Client, once bool) (err error)
 			return nil // poll already reports the unavailable daemon
 		}
 		for _, img := range cfg.AgentImages {
-			ids, total, err := client.ContainersOfImage(ctx, api, img.Image)
+			ids, err := client.ContainersOfImage(ctx, api, img.Image)
 			if err != nil {
 				if reason := safeError(err); reason != discoveryError {
 					discoveryError = reason
@@ -366,12 +348,6 @@ func Run(ctx context.Context, cfg Config, client *Client, once bool) (err error)
 			for _, id := range found.observe(img.Image, ids, selected) {
 				if err := j.Append(event.Event{ID: event.NewID("evt"), Timestamp: time.Now().UTC(), RunID: s.SessionID, Source: "docker", Type: "agent", Action: "instance.discovered", Target: id, Result: "observed", Severity: "warning",
 					Metadata: map[string]any{"reason": "running container of a configured agent image is not a selected target; provenance unknown, lifecycle unchanged", "image": img.Image, "runtime_type": img.RuntimeType, "provenance": "unknown", "trust": "observed", "mode": "observe", "enforced": false}}); err != nil {
-					return err
-				}
-			}
-			if omitted := total - len(ids); found.omit(img.Image, omitted) && omitted > 0 {
-				reason := fmt.Sprintf("%d more running containers of this agent image exceed the discovery bound of %d; they count toward discovered_agents_total but are not listed individually", omitted, maxImageContainers)
-				if err := audit("agent-discovery", img.Image, "observed", "warning", reason); err != nil {
 					return err
 				}
 			}

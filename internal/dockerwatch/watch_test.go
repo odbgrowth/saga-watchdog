@@ -382,18 +382,21 @@ func boolInt(b bool) int {
 	return 0
 }
 
-// More running agent containers than the listing bound are reported as a
-// number in history and status, never dropped silently.
-func TestDiscoveryReportsContainersBeyondTheBound(t *testing.T) {
+// Every running agent container is reported, also beyond the snapshot list
+// bound; overlapping images and selected targets never inflate the total.
+func TestDiscoveryReportsEveryContainerOnce(t *testing.T) {
 	cfg := testConfig(t)
-	cfg.AgentImages = []AgentImage{{Image: "ghcr.io/acme/agent", RuntimeType: "agent"}}
+	cfg.AgentImages = []AgentImage{{Image: "ghcr.io/acme/agent", RuntimeType: "agent"}, {Image: "ghcr.io/acme/agent:v2", RuntimeType: "agent"}}
+	const running = 300
 	c := fixtureClient(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/version":
 			fmt.Fprint(w, `{"ApiVersion":"1.56","MinAPIVersion":"1.44"}`)
 		case "/v1.56/containers/json":
-			var items []string
-			for n := 1; n <= maxImageContainers+44; n++ {
+			// Both images match the same containers, and the selected
+			// target is among them.
+			items := []string{fmt.Sprintf(`{"Id":%q}`, testID)}
+			for n := 1; n <= running; n++ {
 				items = append(items, fmt.Sprintf(`{"Id":"%064x"}`, n))
 			}
 			fmt.Fprint(w, "["+strings.Join(items, ",")+"]")
@@ -412,14 +415,11 @@ func TestDiscoveryReportsContainersBeyondTheBound(t *testing.T) {
 	if err := CopyHistory(cfg.StateDir, &b); err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Count(b.String(), `"action":"instance.discovered"`); got != maxImageContainers {
-		t.Fatalf("%d containers reported individually", got)
-	}
-	if !strings.Contains(b.String(), "44 more running containers") {
-		t.Fatalf("overflow not reported: %s", b.String())
+	if got := strings.Count(b.String(), `"action":"instance.discovered"`); got != running {
+		t.Fatalf("%d containers reported, want each of %d once", got, running)
 	}
 	s, err := ReadSnapshot(cfg)
-	if err != nil || len(s.Discovered) != maxListedDiscoveries || s.DiscoveredTotal != maxImageContainers+44 {
+	if err != nil || len(s.Discovered) != maxListedDiscoveries || s.DiscoveredTotal != running {
 		t.Fatalf("snapshot: %v listed %d of %d", err, len(s.Discovered), s.DiscoveredTotal)
 	}
 }
