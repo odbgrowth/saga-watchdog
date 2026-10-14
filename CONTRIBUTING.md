@@ -88,6 +88,7 @@ PR, check documentation links, run the relevant demos and target `main`.
 
 ```text
 cmd/saga-watchdog/              CLI, supervision loop, agent and docker commands
+internal/authority/             security context, persistent restrictions, agent instances
 internal/config/                strict YAML and built-in profile
 internal/event/                 event IDs, redaction and metadata allowlist
 internal/policy/                rules, path checks and escalation counters

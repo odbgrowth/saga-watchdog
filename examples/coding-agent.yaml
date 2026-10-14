@@ -52,3 +52,26 @@ tools:
   mode: denylist
   allow: []
   deny: [github/delete_repository, 'payments/*']
+
+# Optional: keep enforced restrictions across runs and model sessions of the
+# same operator (SAGA_WATCHDOG_OPERATOR), project and authorization context.
+# See docs/authority.md. Without it, history stays per run.
+# security_context:
+#   authorization_context: dev-local
+#   retention: 24h          # pause-level restrictions
+#   serious_retention: 168h # kill-level restrictions
+
+# Optional: name what a target achieves, so an alternate route to the same
+# effect after a denial is recognized. Entries are type:pattern.
+# effects:
+#   production_deploy:
+#     - network:deploy.example.com
+#     - tool:vercel/deploy
+
+# New agent instances, inference endpoints and remote execution are denied
+# unless listed here. A child agent never inherits its parent's grants.
+# replication:
+#   same_host_workers: 0
+#   allow_agents: []
+#   inference_endpoints: []
+#   remote_hosts: []

@@ -8,3 +8,8 @@ request_timeout: 5s
 targets:
   - name: booking-agent
     container_id: REPLACE_WITH_FULL_CONTAINER_ID
+# Optional: report running containers of these images that are not selected
+# targets as agent instances with unknown provenance. Observation only.
+# agent_images:
+#   - image: ghcr.io/acme/booking-agent
+#     runtime_type: agent

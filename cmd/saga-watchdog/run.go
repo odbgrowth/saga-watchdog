@@ -7,10 +7,12 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/odbgrowth/saga-watchdog/internal/authority"
 	"github.com/odbgrowth/saga-watchdog/internal/config"
 	"github.com/odbgrowth/saga-watchdog/internal/event"
 	"github.com/odbgrowth/saga-watchdog/internal/gitinfo"
@@ -37,6 +39,53 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 		name = filepath.Base(g.Root)
 	}
 	r := store.Run{ID: event.NewID("run"), Project: name, Agent: filepath.Base(command[0]), Status: "starting", Mode: c.Mode, Branch: g.Branch, PolicyHash: hash, Started: time.Now().UTC()}
+	// A run started from inside another supervised run is a new agent
+	// instance. The supervising run must authorize it, and the new instance
+	// takes its identity from that trusted supervisor, never from its own
+	// environment: authority does not replicate, restrictions do.
+	var parent *authority.Instance
+	sock, parentRun := os.Getenv("SAGA_WATCHDOG_SOCKET"), os.Getenv("SAGA_WATCHDOG_RUN_ID")
+	if _, err := os.Stat(sock); sock != "" && parentRun != "" && err != nil {
+		// A finished supervisor removes its socket; a leftover variable is
+		// not a live parent. Removing variables is equally possible for an
+		// agent, so detection is a cooperation signal, not a boundary.
+		fmt.Fprintln(os.Stderr, "Ignoring stale SAGA_WATCHDOG_RUN_ID "+parentRun+": its supervisor socket no longer exists")
+		sock = ""
+	}
+	if id := parentRun; sock != "" && id != "" {
+		response, err := socket.Send(sock, socket.Request{Operation: "check", RunID: id, Event: socket.Input{Type: "agent", Action: "instance.start", Target: r.Agent, Producer: "saga-watchdog", RuntimeType: "agent"}})
+		if err != nil {
+			return fail(fmt.Errorf("nested run inside supervised run %s: the supervising run cannot attribute this agent instance: %w", id, err))
+		}
+		if !response.Allowed || response.Instance == nil {
+			rule := ""
+			if response.Decision != nil {
+				rule = response.Decision.RuleID
+			}
+			return fail(fmt.Errorf("supervised run %s did not authorize another agent instance (rule %s); list it in replication.allow_agents to permit it", id, rule))
+		}
+		parent = response.Instance
+	}
+	projectID, err := store.ProjectID(g.Root)
+	if err != nil {
+		return fail(err)
+	}
+	operator, authorizationContext := os.Getenv(authority.OperatorEnv), c.SecurityContext.AuthorizationContext
+	if parent != nil {
+		operator, authorizationContext = parent.OperatorID, parent.AuthorizationContextID
+	}
+	secCtx, disabled := authority.Resolve(operator, authorizationContext, projectID, name)
+	host := authority.LocalHost()
+	inst := &authority.Instance{ID: authority.NewInstanceID(), PrincipalID: "agent:" + r.Agent, HostID: host.ID, RunID: r.ID, ArtifactID: authority.ArtifactID(command[0]), RuntimeType: "agent", Provenance: "unknown"}
+	if parent != nil {
+		inst.ID, inst.ParentID, inst.AuthorizedByRule = parent.ID, parent.ParentID, parent.AuthorizedByRule
+	}
+	if disabled == "" {
+		inst.OperatorID, inst.ProjectID, inst.AuthorizationContextID, inst.ContextID = secCtx.OperatorID, secCtx.ProjectID, secCtx.AuthorizationContextID, secCtx.ID()
+		inst.Provenance = "trusted"
+		r.ContextID = secCtx.ID()
+	}
+	r.Instance, r.ContextDisabled = inst, disabled
 	audit, err := store.Create(g.Root, r)
 	if err != nil {
 		return fail(err)
@@ -95,9 +144,17 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 			controlsDigest[name] = agenthook.Digest(g.Root, []string{name})
 		}
 	}
+	var authStore *authority.Store
+	if disabled == "" {
+		authStore, err = authority.Open(filepath.Dir(audit.Dir), secCtx, c.SecurityContext.Retention, c.SecurityContext.SeriousRetention)
+		if err != nil {
+			return finish("failed", "persistent authority state: "+err.Error()+"; inspect with: saga-watchdog authority status", 125)
+		}
+	}
 	env := make([]string, 0, len(os.Environ())+2)
 	for _, v := range os.Environ() {
-		if !strings.HasPrefix(v, "SAGA_WATCHDOG_SOCKET=") && !strings.HasPrefix(v, "SAGA_WATCHDOG_RUN_ID=") {
+		// The operator identity is the operator's, not the agent's.
+		if !strings.HasPrefix(v, "SAGA_WATCHDOG_SOCKET=") && !strings.HasPrefix(v, "SAGA_WATCHDOG_RUN_ID=") && !strings.HasPrefix(v, authority.OperatorEnv+"=") {
 			env = append(env, v)
 		}
 	}
@@ -121,8 +178,47 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 	defer stopAndWait()
 	r.Status = "running"
 	engine := policy.New(c, g.Root, r.Controls...)
+	// Producer claims from a configured hook adapter, or from a nested
+	// saga-watchdog, are trusted-integration evidence; any other socket event
+	// is self-reported. Labels never grant authority.
+	// pending pairs a trusted report with the allowed check of the same
+	// action, so the action counts once, and gives a start's report the
+	// instance its check was given.
+	pending := newPendingChecks(c.Escalation.Window, 1024)
+	trustedProducers := map[string]bool{"saga-watchdog": true}
+	for _, spec := range integrations.Specs {
+		for _, file := range spec.Files {
+			if slices.Contains(r.Controls, file) {
+				trustedProducers[spec.Producer] = true
+			}
+		}
+	}
+	trustOf := func(e event.Event) string {
+		switch e.Source {
+		case "control":
+			return "operator"
+		case "integration":
+			if producer, _ := e.Metadata["producer"].(string); trustedProducers[producer] {
+				return "trusted-integration"
+			}
+			return "self-reported"
+		}
+		return "observed"
+	}
+	canonical := func(e event.Event) string {
+		switch e.Type {
+		case "network":
+			return policy.NetworkHost(e.Target)
+		case "file":
+			// The form policy matched, so ./a, a and /project/a are one target.
+			return engine.FileTarget(e.Target)
+		}
+		return e.Target
+	}
 	record := func(e event.Event, d policy.Decision) error {
-		e.ID = event.NewID("evt")
+		if e.ID == "" {
+			e.ID = event.NewID("evt")
+		}
 		e.RunID = r.ID
 		e.ProjectID = name
 		e.Timestamp = time.Now().UTC()
@@ -134,6 +230,11 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 		e.Metadata["decision"] = d.Action
 		e.Metadata["reason"] = d.Reason
 		e.Metadata["mode"] = c.Mode
+		e.Metadata["trust"] = trustOf(e)
+		e.Metadata["instance_id"] = inst.ID
+		if authStore != nil {
+			e.Metadata["context_id"] = secCtx.ID()
+		}
 		if err := audit.Append(e); err != nil {
 			return err
 		}
@@ -156,7 +257,15 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 	}
 	hooks := "none (supervision and observation only)"
 	if len(r.Controls) > 0 {
-		hooks = "claude-code via " + strings.Join(r.Controls, ", ")
+		hooks = "preventive via " + strings.Join(r.Controls, ", ")
+	}
+	contextLine := secCtx.ID() + " (" + secCtx.OperatorID + ", " + secCtx.AuthorizationContextID + "); restrictions persist across runs"
+	if disabled != "" {
+		contextLine = "none: cross-run authority correlation disabled (" + disabled + ")"
+	}
+	instanceLine := inst.ID
+	if inst.ParentID != "" {
+		instanceLine += " (child of " + inst.ParentID + ", no inherited grants)"
 	}
 	if c.Run.Unattended {
 		hooks += "; unattended (a pause denies checks but does not stop the process)"
@@ -164,7 +273,7 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 			fmt.Fprintln(os.Stderr, "WARNING: run.unattended without a preventive hook: a pause cannot restrain this agent; only kill decisions and the run budget stop it")
 		}
 	}
-	fmt.Fprintf(os.Stderr, "SAGA Watchdog %s\nProject  %s\nRun      %s\nMode     %s\nBranch   %s\nPolicy   %s\nHooks    %s\nStarting %s\n", version, event.Redact(name), r.ID, c.Mode, event.Redact(g.Branch), hash[:12], hooks, event.Redact(r.Agent))
+	fmt.Fprintf(os.Stderr, "SAGA Watchdog %s\nProject  %s\nRun      %s\nMode     %s\nBranch   %s\nPolicy   %s\nHooks    %s\nContext  %s\nInstance %s\nStarting %s\n", version, event.Redact(name), r.ID, c.Mode, event.Redact(g.Branch), hash[:12], hooks, event.Redact(contextLine), instanceLine, event.Redact(r.Agent))
 	timeout := time.NewTimer(c.Run.MaxDuration)
 	defer timeout.Stop()
 	tick := time.NewTicker(time.Second)
@@ -258,13 +367,138 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 			stop(d.Reason, d.RuleID)
 		}
 	}
+	attemptOf := func(e event.Event) authority.Attempt {
+		session, _ := e.Metadata["session_id"].(string)
+		hostID, _ := e.Metadata["host_id"].(string)
+		if hostID == "" {
+			hostID = host.ID
+		}
+		return authority.Attempt{Type: e.Type, Action: e.Action, Target: canonical(e), Effects: engine.Effects(e), EventID: e.ID, RunID: r.ID, InstanceID: inst.ID, SessionID: session, HostID: hostID}
+	}
+	// trajectory continues restrictions earned earlier in the same trusted
+	// context: across runs, model sessions, agent instances and hosts. It only
+	// matches observable policy facts and never infers intent.
+	shadow := map[string]int{}
+	trajectory := func(e *event.Event, base policy.Decision) (policy.Decision, *authority.Match) {
+		if authStore == nil {
+			return base, nil
+		}
+		// Without its authority state the run cannot know what applies: it
+		// stops, and the event is denied rather than allowed.
+		failed := func(reason string) (policy.Decision, *authority.Match) {
+			stop(reason, "authority-state-failed")
+			return policy.Decide("kill", "authority-state-failed", reason), nil
+		}
+		st, err := authStore.Current()
+		if err != nil {
+			return failed("persistent authority state unreadable: " + err.Error())
+		}
+		m, ok := st.Correlate(attemptOf(*e), time.Now().UTC())
+		if !ok {
+			return base, nil
+		}
+		attempts := m.Restriction.Attempts + 1
+		if c.Mode != "enforce" {
+			// Observe mode persists nothing; a per-run shadow count shows the
+			// decisions enforce mode would take.
+			shadow[m.Restriction.ID]++
+			attempts = m.Restriction.Attempts + shadow[m.Restriction.ID]
+		} else {
+			// Count the step under the state lock: a parallel run in this
+			// context gets the next number, so no threshold is skipped.
+			a := attemptOf(*e)
+			now := time.Now().UTC()
+			n, err := authStore.Attempt(now, m.Restriction.ID, authority.Link{At: now, RunID: r.ID, EventID: e.ID, InstanceID: inst.ID, SessionID: a.SessionID, HostID: a.HostID, Type: e.Type, Target: a.Target, Correlation: m.Correlation})
+			if err != nil {
+				return failed("cannot persist authority state: " + err.Error())
+			}
+			if n == 0 {
+				return base, nil // the restriction ended meanwhile
+			}
+			attempts = n
+		}
+		action := "pause"
+		switch {
+		case attempts >= c.Escalation.KillAfter:
+			action = "kill"
+		case policy.Expansion(e.Type, e.Action) && base.Authorization != "":
+			// An authorized new instance in a restricted context: the
+			// restrictions apply to it; it is evidence, not a violation.
+			action = "warn"
+		case policy.Expansion(e.Type, e.Action):
+			// Unauthorized replication after a denial is the bypass itself.
+			action = "kill"
+		}
+		reason := fmt.Sprintf("%s: continues unresolved restriction %s (%s denied %s %s in run %s at %s); attempt %d", m.Correlation, m.Restriction.ID, m.Restriction.Rule, m.Restriction.Type, m.Restriction.Target, m.Restriction.RunID, m.Restriction.Created.Format(time.RFC3339), attempts)
+		if base.Action != "allow" && base.RuleID != "" {
+			reason = base.RuleID + ": " + base.Reason + "; " + reason
+		}
+		e.Metadata["restriction_id"] = m.Restriction.ID
+		e.Metadata["original_event_id"] = m.Restriction.EventID
+		e.Metadata["original_run_id"] = m.Restriction.RunID
+		e.Metadata["correlation"] = m.Correlation
+		e.Metadata["attempts"] = attempts
+		return policy.Stronger(policy.Decide(action, "authority-expansion-after-denial", reason), base), &m
+	}
+	// Kills from replication evidence need more than the agent's own word.
+	capSelfReported := func(e event.Event, d policy.Decision) policy.Decision {
+		if d.Action == "kill" && trustOf(e) == "self-reported" && (policy.ReplicationType(e.Type) || d.RuleID == "authority-expansion-after-denial") {
+			d = policy.Decide("pause", d.RuleID, d.Reason+" (self-reported evidence: capped at pause)")
+		}
+		return d
+	}
+	// enforced is what a restriction records: the base rule with the
+	// strongest action that took effect for the event, so an escalated kill
+	// upgrades it and capped self-reported evidence does not.
+	enforced := func(e event.Event, base, d policy.Decision) policy.Decision {
+		if base.Escalates != "" {
+			// In-run escalation replaced a concrete denial; the restriction
+			// is that denial, enforced with the escalated action.
+			base = policy.Decide(base.Action, base.Escalates, base.Reason)
+		}
+		eff := capSelfReported(e, base)
+		if d.Action == "kill" && eff.Action == "pause" {
+			eff.Action = "kill"
+		}
+		return eff
+	}
+	// persist records an enforced event's effect on persistent state: the
+	// matched restriction upgraded to kill when a kill took effect, and a new
+	// restriction for a persistable base rule.
+	persist := func(e event.Event, base, d policy.Decision, m *authority.Match) {
+		if authStore == nil || c.Mode != "enforce" {
+			return
+		}
+		base = enforced(e, base, d)
+		now := time.Now().UTC()
+		a := attemptOf(e)
+		// The step itself was counted by trajectory; a kill that took effect
+		// on it upgrades the restriction.
+		if m != nil && d.Action == "kill" {
+			if err := authStore.Escalate(now, m.Restriction.ID, r.ID); err != nil {
+				stop("cannot persist authority state: "+err.Error(), "authority-state-failed")
+				return
+			}
+		}
+		if policy.Persistable(base) {
+			if err := authStore.Add(now, authority.Restriction{Rule: base.RuleID, Decision: base.Action, Type: e.Type, Target: a.Target, Effects: a.Effects, RunID: r.ID, EventID: e.ID, InstanceID: inst.ID, SessionID: a.SessionID, HostID: a.HostID}); err != nil {
+				stop("cannot persist authority state: "+err.Error(), "authority-state-failed")
+			}
+		}
+	}
 	handle := func(e event.Event) {
 		e.Timestamp = time.Now().UTC()
-		d := engine.Evaluate(e)
+		e.ID = event.NewID("evt")
+		if e.Metadata == nil {
+			e.Metadata = map[string]any{}
+		}
+		base := engine.Evaluate(e)
+		d, m := trajectory(&e, base)
 		if err := record(e, d); err != nil {
 			stop("audit write failed: "+err.Error(), "audit-failed")
 			return
 		}
+		persist(e, base, d, m)
 		apply(d)
 	}
 	for {
@@ -371,9 +605,10 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 				// An operator widens this run's authority by one host or tool. The
 				// grant is audited before it takes effect and never overrides a
 				// deny entry.
+				// The same normalized form is granted, recorded and resolved.
 				target := request.Event.Target
 				if request.Event.Type == "network" {
-					target = strings.ToLower(strings.TrimSuffix(target, "."))
+					target = policy.NetworkHost(target)
 				}
 				if err := record(event.Event{Source: "control", Type: "process", Action: "grant", Target: request.Event.Type + " " + target, Result: "requested"}, policy.Decision{Action: "allow", Severity: "info"}); err != nil {
 					call.Reply <- socket.Response{Error: "audit unavailable"}
@@ -388,6 +623,15 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 				if added {
 					// Only distinct grants are persisted; the engine bounds them.
 					r.Grants = append(r.Grants, request.Event.Type+" "+target)
+				}
+				// A grant is a trusted operator decision about this exact
+				// target: it resolves the matching persistent restrictions.
+				if authStore != nil && c.Mode == "enforce" {
+					if _, err := authStore.Resolve(time.Now().UTC(), request.Event.Type, target, secCtx.OperatorID, "operator grant in run "+r.ID); err != nil {
+						call.Reply <- socket.Response{Error: "authority state unavailable"}
+						stop("cannot persist authority state: "+err.Error(), "authority-state-failed")
+						continue
+					}
 				}
 				snapshot := r
 				call.Reply <- socket.Response{Allowed: true, Run: &snapshot}
@@ -453,15 +697,96 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 					e.Metadata = map[string]any{}
 				}
 				e.Metadata["operation"] = request.Operation
+				e.ID = event.NewID("evt")
+				creation := false
+				if policy.ReplicationType(e.Type) {
+					// Normalize where the runtime runs and what kind it is; both
+					// are claims that can only narrow replication policy.
+					hostID, remote := host.Classify(request.Event.Host)
+					runtimeType := request.Event.RuntimeType
+					if runtimeType == "" {
+						runtimeType = "agent"
+						if e.Type == "inference" {
+							runtimeType = "inference-endpoint"
+						}
+					}
+					e.Metadata["host_id"], e.Metadata["remote"], e.Metadata["runtime_type"] = hostID, remote, runtimeType
+					creation = !strings.HasSuffix(e.Action, ".stop") && !strings.HasSuffix(e.Action, ".discovered") && e.Type != "remote"
+				}
+				// Policy weighs trust where a report would release budget.
+				e.Metadata["trust"] = trustOf(e)
 				pausedCheck := r.Status == "paused" && request.Operation == "check"
 				if pausedCheck {
 					e.Result = "denied"
 				}
-				d := engine.Evaluate(e)
+				// Pair a report with the allowed check of its action before
+				// policy sees it: only a paired report confirms or releases
+				// that check's worker reservation.
+				// A report pairs only with a check that carries the same lineage:
+				// one producer's, session's or agent's report never pairs with
+				// another's check. Adapters send the same lineage on both.
+				producer, _ := e.Metadata["producer"].(string)
+				session, _ := e.Metadata["session_id"].(string)
+				agentID, _ := e.Metadata["agent_id"].(string)
+				callID, _ := e.Metadata["tool_use_id"].(string)
+				hostKey, _ := e.Metadata["host_id"].(string)
+				runtimeKey, _ := e.Metadata["runtime_type"].(string)
+				// A file pairs by its lexical name: the symlink-resolved name
+				// can change as a result of the action itself.
+				pairTarget := canonical(e)
+				if e.Type == "file" {
+					pairTarget = engine.LexicalFileTarget(e.Target)
+				}
+				actionKey := strings.Join([]string{producer, session, agentID, e.Type, e.Action, pairTarget, callID, hostKey, runtimeKey}, "\x00")
+				var prior pendingCheck
+				paired := false
+				if request.Operation == "emit" {
+					// A start report that names its instance pairs with exactly
+					// that check; without one, with the oldest of its action.
+					named := ""
+					if creation {
+						named = request.Event.Instance
+					}
+					prior, paired = pending.take(actionKey, time.Now(), trustOf(e), named)
+				}
+				e.Metadata[policy.PairedKey] = paired
+				// Worker slots are kept by instance: a start gets its instance
+				// ID before policy sees it (the check's, for the report paired
+				// with it), and a stop names the instance it ends.
+				instanceID := ""
+				switch {
+				case creation && prior.instance != nil:
+					instanceID = prior.instance.ID
+				case creation:
+					instanceID = authority.NewInstanceID()
+				case e.Type == "agent" && e.Action == "instance.stop":
+					instanceID = request.Event.Instance
+					if instanceID != "" {
+						e.Metadata["stopped_instance_id"] = instanceID
+					}
+				}
+				e.Metadata[policy.InstanceKey] = instanceID
+				base := engine.Evaluate(e)
+				delete(e.Metadata, policy.PairedKey)
+				delete(e.Metadata, policy.InstanceKey)
+				d, match := base, (*authority.Match)(nil)
+				// A hook's post-action report mirrors the check it follows;
+				// correlating both would count one action twice. A trusted
+				// report without a matching check (a pre-hook that failed open)
+				// is the only evidence of its action and is correlated.
+				mirrored := paired && trustOf(e) == "trusted-integration"
+				if !mirrored {
+					d, match = trajectory(&e, base)
+				}
+				d = capSelfReported(e, d)
 				if pausedCheck && d.Action != "kill" {
 					d = policy.Decision{Action: "pause", RuleID: "run-paused", Reason: "run is paused; explicit resume required", Severity: "high"}
 				}
 				allowed := permits(c.Mode, d) && !pausedCheck
+				if !allowed {
+					// A worker slot follows the final decision, not the engine's.
+					engine.Release(base, instanceID)
+				}
 				// The decision above used the submitted path. Record an absolute
 				// in-project path by its project-relative name for readability.
 				if e.Type == "file" && filepath.IsAbs(e.Target) {
@@ -476,12 +801,49 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 						e.Result = "denied"
 					}
 				}
+				// A new instance gets provenance, never authority: it starts with
+				// no grants, and only a Watchdog-supervised child in a complete
+				// trusted context is "trusted".
+				var child *authority.Instance
+				if creation {
+					hostID, _ := e.Metadata["host_id"].(string)
+					remote, _ := e.Metadata["remote"].(bool)
+					runtimeType, _ := e.Metadata["runtime_type"].(string)
+					// The report of a start names the instance its check was
+					// given: one start is one instance. A later check is a new
+					// start and gets a new instance.
+					child = prior.instance
+					if child == nil {
+						child = &authority.Instance{ID: instanceID, ParentID: inst.ID, PrincipalID: "agent:" + e.Target, HostID: hostID, RuntimeType: runtimeType, Provenance: "unknown"}
+						if allowed {
+							child.AuthorizedByRule = base.Authorization
+							if authStore != nil {
+								child.OperatorID, child.ProjectID, child.AuthorizationContextID, child.ContextID = secCtx.OperatorID, secCtx.ProjectID, secCtx.AuthorizationContextID, secCtx.ID()
+							}
+							if authStore != nil && !remote && trustOf(e) == "trusted-integration" && e.Metadata["producer"] == "saga-watchdog" {
+								child.Provenance = "trusted"
+							}
+						}
+					}
+				}
+				// Only an allowed check is followed by a report of its action.
+				if request.Operation == "check" && allowed {
+					pending.add(actionKey, time.Now(), trustOf(e), child, base.Reserved)
+				}
+				if child != nil {
+					e.Metadata["child_instance_id"], e.Metadata["provenance"], e.Metadata["authorized_by_rule"] = child.ID, child.Provenance, child.AuthorizedByRule
+				}
 				if err := record(e, d); err != nil {
 					call.Reply <- socket.Response{Error: "audit unavailable"}
 					stop(err.Error(), "audit-failed")
 					continue
 				}
-				call.Reply <- socket.Response{Allowed: allowed, Decision: &d}
+				persist(e, base, d, match)
+				response := socket.Response{Allowed: allowed, Decision: &d}
+				if allowed && child != nil {
+					response.Instance = child
+				}
+				call.Reply <- response
 				apply(d)
 			}
 		}

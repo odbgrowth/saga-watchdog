@@ -151,7 +151,7 @@ ready:
 			t.Fatalf("early exit %v: %s", err, out)
 		case <-ticker.C:
 			_, found, err := store.Locate(root, "")
-			if err == nil && found.Socket != "" {
+			if err == nil && found.Socket != "" && found.Finished == nil {
 				r = found
 				break ready
 			}

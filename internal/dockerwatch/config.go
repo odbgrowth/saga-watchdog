@@ -28,9 +28,21 @@ type Config struct {
 	PollInterval   time.Duration `yaml:"poll_interval"`
 	RequestTimeout time.Duration `yaml:"request_timeout"`
 	Targets        []Target      `yaml:"targets"`
+	// AgentImages marks images whose containers are agent workloads. A
+	// running container of such an image that is not a selected target is
+	// reported as agent.instance.discovered with unknown provenance. It is
+	// never stopped, paused or otherwise changed.
+	AgentImages []AgentImage `yaml:"agent_images" json:"agent_images,omitempty"`
+}
+
+// AgentImage names an image reference and the kind of runtime it carries.
+type AgentImage struct {
+	Image       string `yaml:"image" json:"image"`
+	RuntimeType string `yaml:"runtime_type" json:"runtime_type"`
 }
 
 var fullID = regexp.MustCompile(`^[a-f0-9]{64}$`)
+var imageRef = regexp.MustCompile(`^[a-z0-9][a-z0-9._/:@-]{0,254}$`)
 var targetName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}$`)
 
 func Parse(r io.Reader) (Config, error) {
@@ -85,6 +97,19 @@ func (c Config) Validate() error {
 			return fmt.Errorf("duplicate target name or container ID: %s", t.Name)
 		}
 		names[t.Name], ids[t.ID] = true, true
+	}
+	if len(c.AgentImages) > 16 {
+		return errors.New("configure at most 16 agent_images")
+	}
+	for _, a := range c.AgentImages {
+		if !imageRef.MatchString(a.Image) {
+			return fmt.Errorf("agent_images: %q is not a plain image reference", a.Image)
+		}
+		switch a.RuntimeType {
+		case "agent", "worker", "model-server", "inference-endpoint":
+		default:
+			return errors.New("agent_images: runtime_type must be agent, worker, model-server or inference-endpoint")
+		}
 	}
 	return nil
 }

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -18,6 +20,17 @@ type Decision struct {
 	RuleID   string `json:"rule_id,omitempty"`
 	Reason   string `json:"reason,omitempty"`
 	Severity string `json:"severity"`
+	// Authorization names the trusted policy entry that authorized a new
+	// agent instance or runtime, such as replication.allow_agents. It is
+	// provenance, kept even when escalation raises the action.
+	Authorization string `json:"authorization,omitempty"`
+	// Escalates is the rule of the base decision an escalation replaced, so
+	// the supervisor can persist what the concrete denial was. Not part of
+	// the protocol.
+	Escalates string `json:"-"`
+	// Reserved marks a check that took a new worker slot. Not part of the
+	// protocol.
+	Reserved bool `json:"-"`
 }
 
 type observation struct {
@@ -39,6 +52,38 @@ type Engine struct {
 	// shellCounted records that the shell follow-up for the latest genuine
 	// denial has been counted; only a new denial makes the shell count again.
 	shellCounted bool
+	// workers holds one slot per same-host worker instance. A refused worker
+	// that reports it started anyway holds one too, so the ledger can exceed
+	// replication.same_host_workers.
+	workers workerLedger
+}
+
+// PairedKey is the event metadata the supervisor sets on a report it paired
+// with the allowed check of the same action. Only a paired report confirms
+// or releases that check's worker reservation.
+const PairedKey = "paired"
+
+// InstanceKey is the event metadata the supervisor sets to the worker
+// instance an event is about: the instance it assigns to a start (the check's,
+// for the report paired with it) or the instance a stop names. Worker slots
+// are kept by this ID, so an event about one instance never frees another.
+const InstanceKey = "worker_instance"
+
+func instanceOf(ev event.Event) string {
+	id, _ := ev.Metadata[InstanceKey].(string)
+	return id
+}
+
+func paired(ev event.Event) bool {
+	p, _ := ev.Metadata[PairedKey].(bool)
+	return p
+}
+
+// report tells a post-action report from a pre-action check. The supervisor
+// marks the operation; a check carries no result of its own.
+func report(ev event.Event) bool {
+	op, _ := ev.Metadata["operation"].(string)
+	return ev.Result != "" && op != "check"
 }
 
 // maxGrants bounds operator grants for one run. With targets bounded by the
@@ -57,6 +102,19 @@ func New(cfg config.Config, root string, controls ...string) *Engine {
 	cfg.Network.Allow = append([]string(nil), cfg.Network.Allow...)
 	cfg.Tools.Deny = append([]string(nil), cfg.Tools.Deny...)
 	cfg.Tools.Allow = append([]string(nil), cfg.Tools.Allow...)
+	cfg.Replication.AllowAgents = append([]string(nil), cfg.Replication.AllowAgents...)
+	cfg.Replication.InferenceEndpoints = append([]string(nil), cfg.Replication.InferenceEndpoints...)
+	// Configured hosts take the form reported hosts are classified into.
+	remoteHosts := cfg.Replication.RemoteHosts
+	cfg.Replication.RemoteHosts = nil
+	for _, host := range remoteHosts {
+		cfg.Replication.RemoteHosts = append(cfg.Replication.RemoteHosts, strings.ToLower(strings.TrimSuffix(host, ".")))
+	}
+	effects := make(map[string][]string, len(cfg.Effects))
+	for name, patterns := range cfg.Effects {
+		effects[name] = append([]string(nil), patterns...)
+	}
+	cfg.Effects = effects
 	return &Engine{cfg: cfg, root: root, controls: append([]string(nil), controls...), grants: map[string]struct{}{}}
 }
 
@@ -109,15 +167,49 @@ func hostListed(entries []string, host string) bool {
 	return false
 }
 
+// Decide builds a decision with the severity that belongs to its action.
+func Decide(action, rule, reason string) Decision { return decide(action, rule, reason) }
+
 func decide(action, rule, reason string) Decision {
 	severity := map[string]string{"allow": "info", "warn": "warning", "pause": "high", "kill": "critical"}[action]
 	return Decision{Action: action, RuleID: rule, Reason: reason, Severity: severity}
 }
 
+// FileTarget is the canonical project-relative form of a file target: its
+// symlink-resolved name, so every alias of one file is one target, else its
+// lexical name, else the target itself.
+func (e *Engine) FileTarget(target string) string {
+	if resolved, err := normalize(e.root, target, true); err == nil {
+		return resolved
+	}
+	return e.LexicalFileTarget(target)
+}
+
+// LexicalFileTarget is the project-relative form of a file target without
+// resolving symlinks, else the target itself. Unlike FileTarget it cannot
+// change when the action itself creates or removes a link or its target.
+func (e *Engine) LexicalFileTarget(target string) string {
+	if normalized, err := normalize(e.root, target, false); err == nil {
+		return normalized
+	}
+	return target
+}
+
+// Release frees the worker slot that this event's check reserved for
+// instance id when the supervisor denies the check after all, for example on
+// a persistent trajectory. A slot taken earlier, or confirmed running, stays.
+func (e *Engine) Release(d Decision, id string) {
+	if d.Reserved {
+		e.workers.remove(id, reserved)
+	}
+}
+
 // Evaluate leaves observe/enforce handling to the supervisor: audit decisions
 // must retain the exact action that would have been applied in enforce mode.
 // Timestamp must be assigned by the supervisor, never accepted from a client.
-func (e *Engine) Evaluate(ev event.Event) Decision {
+func (e *Engine) Evaluate(ev event.Event) (d Decision) {
+	// Worker accounting follows every decision, whichever path returns it.
+	defer func() { e.reserveWorker(ev, &d) }()
 	now := ev.Timestamp
 	if now.IsZero() {
 		now = time.Now()
@@ -177,6 +269,17 @@ func (e *Engine) Evaluate(ev event.Event) Decision {
 			}
 		}
 	}
+	if ReplicationType(ev.Type) {
+		base = e.replication(ev)
+		if base.RuleID == "unauthorized-agent-replication" && len(e.denials) > 0 {
+			// Replication right after a denial is the route around it.
+			base = decide("kill", base.RuleID, base.Reason+"; attempted after a denial in this run")
+		}
+	} else if ev.Type == "authority" {
+		// No event can clear, reset or approve security state. An attempt from
+		// inside a run is itself a security event.
+		base = decide("pause", "authority-self-clear", "security history can only be cleared by an operator outside the run")
+	}
 	if base.Action == "kill" {
 		return base
 	}
@@ -185,10 +288,56 @@ func (e *Engine) Evaluate(ev event.Event) Decision {
 		denied = true
 	}
 	escalation := e.escalate(ev, now, denied)
+	d = base
 	if rank(escalation.Action) > rank(base.Action) || (base.RuleID == "" && escalation.RuleID != "") {
-		return escalation
+		escalation.Authorization = base.Authorization
+		escalation.Escalates = base.RuleID
+		d = escalation
 	}
-	return base
+	return d
+}
+
+// reserveWorker moves worker slots through their states. An allowed check
+// reserves a slot for its instance; the report paired with it confirms that
+// reservation as running. A start reported as failed, denied or blocked
+// releases only an unconfirmed reservation, never the slot of a worker that
+// already runs. A confirmed start without a reservation is a worker of its
+// own, counted even when policy refused it. Only a trusted successful stop
+// report frees a slot (see replication).
+func (e *Engine) reserveWorker(ev event.Event, d *Decision) {
+	runtimeType, _ := ev.Metadata["runtime_type"].(string)
+	remote, _ := ev.Metadata["remote"].(bool)
+	if runtimeType != "worker" || remote || !Expansion(ev.Type, ev.Action) {
+		return
+	}
+	budgeted := d.Authorization == "" || d.Authorization == "replication.same_host_workers"
+	id := instanceOf(ev)
+	switch {
+	case !report(ev):
+		// A check the supervisor already denied (a paused run) reserves
+		// nothing; neither does one another rule authorized.
+		// A check whose instance cannot be tracked holds budget until the
+		// run ends: fail closed.
+		if d.Authorization == "replication.same_host_workers" && ev.Result == "" && rank(d.Action) < rank("pause") {
+			if e.workers.add(id, reserved) {
+				d.Reserved = true
+			} else {
+				e.workers.untracked++
+			}
+		}
+	case ev.Result == "failed" || ev.Result == "denied" || ev.Result == "blocked":
+		// Pairing proves the report follows the check, not that the start
+		// failed: a self-reported failure never widens the budget.
+		if trust, _ := ev.Metadata["trust"].(string); paired(ev) && trust != "self-reported" {
+			e.workers.remove(id, reserved)
+		}
+	case paired(ev) && e.workers.promote(id):
+	case budgeted:
+		// The worker started, whatever this run decides about it now.
+		if !e.workers.add(id, running) {
+			e.workers.untracked++
+		}
+	}
 }
 
 func (e *Engine) file(ev event.Event, now time.Time) Decision {
@@ -291,7 +440,9 @@ func (e *Engine) escalate(ev event.Event, now time.Time, denied bool) Decision {
 			}
 		}
 		switch {
-		case ev.Type == "credential" || ev.Type == "tool":
+		case ev.Type == "credential" || ev.Type == "tool" || Expansion(ev.Type, ev.Action):
+			// A new agent instance, runtime or host after a denial is an
+			// alternative route as well.
 			count = !repeated
 		case ev.Type == "network" || ev.Type == "git":
 			count = related && !repeated
@@ -350,6 +501,179 @@ func appendBounded(items []observation, item observation, limit int) []observati
 		return items
 	}
 	return append(items, item)
+}
+
+// ReplicationType reports the event types decided by replication policy.
+func ReplicationType(typeID string) bool {
+	return typeID == "agent" || typeID == "runtime" || typeID == "inference" || typeID == "remote"
+}
+
+// Expansion reports events that create or reach another agent instance,
+// runtime, endpoint or host. Stopping an instance reduces authority and a
+// discovery reports one the run did not create; neither is an expansion.
+func Expansion(typeID, action string) bool {
+	return ReplicationType(typeID) && !strings.HasSuffix(action, ".stop") && !strings.HasSuffix(action, ".discovered")
+}
+
+// persistable are the rules whose denials outlive a run when persistent
+// authority correlation is enabled: each denies a concrete target or effect.
+// Derived rules (failure-escalation, run-paused, authority-expansion-after-
+// denial) and run lifecycle rules are not restrictions in their own right.
+var persistable = map[string]bool{
+	"network-denied": true, "network-unlisted": true, "network-redirector": true,
+	"tool-denied": true, "tool-unlisted": true,
+	"protected-path": true, "unsafe-path": true, "protected-branch": true,
+	"git-security-modification": true, "ci-workflow-modification": true, "agent-config-modification": true,
+	"hook-tamper": true, "policy-tamper": true,
+	"unauthorized-agent-replication": true, "cross-host-authority-expansion": true, "authority-self-clear": true,
+}
+
+// Persistable reports whether a pause or kill decision becomes a restriction
+// that survives the run.
+func Persistable(d Decision) bool {
+	return (d.Action == "pause" || d.Action == "kill") && persistable[d.RuleID]
+}
+
+// NetworkHost normalizes a host, host:port or URL target to its lowercase host.
+func NetworkHost(target string) string { return networkHost(target) }
+
+// Stronger returns the decision with the higher intervention; a tie keeps a.
+func Stronger(a, b Decision) Decision {
+	if rank(b.Action) > rank(a.Action) {
+		return b
+	}
+	return a
+}
+
+// replication decides events that create, discover or stop agent instances,
+// runtimes and inference endpoints, or execute on another host. Nothing is
+// authorized unless trusted policy lists it: authority does not replicate.
+// runtime_type, host_id and remote come from the supervisor's normalization
+// of the reported event; they can only narrow what policy allows.
+func (e *Engine) replication(ev event.Event) Decision {
+	host, _ := ev.Metadata["host_id"].(string)
+	remote, _ := ev.Metadata["remote"].(bool)
+	runtimeType, _ := ev.Metadata["runtime_type"].(string)
+	r := e.cfg.Replication
+	hostAllowed := slices.Contains(r.RemoteHosts, host)
+	listed := func(patterns []string) bool {
+		for _, p := range patterns {
+			if Match(p, ev.Target) {
+				return true
+			}
+		}
+		return false
+	}
+	switch ev.Type + "." + ev.Action {
+	case "agent.instance.stop":
+		// Only a reported successful stop of a counted worker frees its slot;
+		// a pre-action check or a failed stop leaves the worker running. A
+		// self-reported stop is recorded but frees nothing: the agent's own
+		// word never widens its budget.
+		// A stop ends the running worker instance it names; it never
+		// touches an outstanding reservation, which only its own paired
+		// report can release. Only a stop that names a same-host worker
+		// touches the worker ledger, and a repeated or delayed stop of an
+		// instance that already stopped frees nothing.
+		trust, _ := ev.Metadata["trust"].(string)
+		if report(ev) && ev.Result == "success" && trust != "self-reported" && runtimeType == "worker" && !remote {
+			e.workers.remove(instanceOf(ev), running)
+		}
+		return decide("allow", "", "")
+	case "agent.instance.discovered", "inference.endpoint.discovered":
+		// Each discovery is attributed only by its own allowlist.
+		known := listed(r.AllowAgents)
+		if ev.Type == "inference" {
+			known = slices.Contains(r.InferenceEndpoints, ev.Target)
+		}
+		if known {
+			return decide("allow", "", "")
+		}
+		return decide("warn", "unattributed-agent-instance", "agent instance or endpoint discovered without known provenance; it holds no authority from this run")
+	case "remote.execution.attempt":
+		if !remote {
+			return decide("allow", "", "")
+		}
+		if hostAllowed {
+			return Decision{Action: "allow", Authorization: "replication.remote_hosts", Severity: "info", Reason: "remote host authorized by replication.remote_hosts"}
+		}
+		return decide("pause", "cross-host-authority-expansion", "execution on host "+host+" is not authorized by replication.remote_hosts")
+	}
+	// Everything else creates a runtime: agent.instance.start,
+	// agent.replication.attempt, runtime.deploy|copy|start,
+	// inference.endpoint.start.
+	if remote {
+		if hostAllowed {
+			return Decision{Action: "allow", Authorization: "replication.remote_hosts", Severity: "info", Reason: "remote host authorized by replication.remote_hosts"}
+		}
+		return decide("kill", "cross-host-authority-expansion", "agent runtime created on host "+host+" without authorization; cross-host execution is a privileged effect")
+	}
+	if ev.Type == "inference" {
+		if slices.Contains(r.InferenceEndpoints, ev.Target) {
+			return Decision{Action: "allow", Authorization: "replication.inference_endpoints", Severity: "info", Reason: "endpoint authorized by replication.inference_endpoints"}
+		}
+		return decide("pause", "unauthorized-agent-replication", "inference endpoint "+ev.Target+" is not listed in replication.inference_endpoints")
+	}
+	// A report confirming a reservation is that reserved worker; any other
+	// start, a second check under the same name included, needs a slot.
+	if pairs := report(ev) && paired(ev) && e.workers.has(instanceOf(ev), reserved); runtimeType == "worker" && (pairs || e.workers.inUse() < r.SameHostWorkers) {
+		inUse := e.workers.inUse()
+		if !pairs {
+			inUse++
+		}
+		return Decision{Action: "allow", Authorization: "replication.same_host_workers", Severity: "info", Reason: fmt.Sprintf("worker %s authorized by replication.same_host_workers (%d of %d)", ev.Target, inUse, r.SameHostWorkers)}
+	}
+	if runtimeType == "worker" {
+		// Workers are governed by their budget alone; allow_agents never
+		// adds worker slots.
+		return decide("pause", "unauthorized-agent-replication", fmt.Sprintf("worker %s exceeds replication.same_host_workers (%d)", ev.Target, r.SameHostWorkers))
+	}
+	if listed(r.AllowAgents) {
+		return Decision{Action: "allow", Authorization: "replication.allow_agents", Severity: "info", Reason: "runtime authorized by replication.allow_agents"}
+	}
+	return decide("pause", "unauthorized-agent-replication", "starting another autonomous runtime ("+ev.Target+") is not authorized by replication policy")
+}
+
+// Effects returns the named effects an event reaches, sorted. Effects are
+// declared by trusted policy; they group targets that achieve the same
+// restricted outcome, such as several deployment APIs.
+func (e *Engine) Effects(ev event.Event) []string {
+	targets := []string{ev.Target}
+	switch ev.Type {
+	case "network":
+		targets = []string{networkHost(ev.Target)}
+	case "file":
+		// Like the file rules, match the lexical and the resolved name.
+		targets = nil
+		for _, follow := range []bool{false, true} {
+			if normalized, err := normalize(e.root, ev.Target, follow); err == nil {
+				targets = append(targets, normalized)
+			}
+		}
+	}
+	matches := func(typ, pattern string) bool {
+		for _, target := range targets {
+			if (typ == "network" && hostListed([]string{pattern}, target)) || (typ != "network" && Match(pattern, target)) {
+				return true
+			}
+		}
+		return false
+	}
+	var names []string
+	for name, patterns := range e.cfg.Effects {
+		for _, entry := range patterns {
+			typ, pattern, _ := strings.Cut(entry, ":")
+			if typ != ev.Type {
+				continue
+			}
+			if matches(typ, pattern) {
+				names = append(names, name)
+				break
+			}
+		}
+	}
+	sort.Strings(names)
+	return names
 }
 
 func rank(action string) int {

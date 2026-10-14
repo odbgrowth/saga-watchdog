@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -48,6 +49,94 @@ type Snapshot struct {
 	EventStream string         `json:"event_stream"`
 	StreamError string         `json:"stream_error,omitempty"`
 	Targets     []TargetStatus `json:"targets"`
+	// Discovered lists running agent-image containers that are not selected
+	// targets, at most maxListedDiscoveries of DiscoveredTotal. They have
+	// unknown provenance and are observed, never controlled.
+	Discovered      []string `json:"discovered_agents,omitempty"`
+	DiscoveredTotal int      `json:"discovered_agents_total,omitempty"`
+	// DiscoveryUnknown lists agent images whose containers could not be
+	// listed in the latest poll; their earlier containers are not shown as
+	// current.
+	DiscoveryUnknown []string `json:"discovery_unknown,omitempty"`
+}
+
+// maxListedDiscoveries bounds the snapshot list; the audit history records
+// every discovery regardless.
+const maxListedDiscoveries = 64
+
+// discovery tracks, per configured image, the running containers nobody
+// selected. A container is reported when it appears; one that stops and later
+// runs again is reported again. Memory is bounded by Docker's 4 MiB response
+// limit per image and the number of configured images.
+type discovery struct {
+	running map[string]map[string]bool
+	// unknown marks images whose latest listing failed. Their last set is
+	// kept only to avoid reporting unchanged containers again on recovery.
+	unknown map[string]bool
+}
+
+// fail marks image unknown until a listing succeeds again.
+func (d *discovery) fail(image string) {
+	if d.unknown == nil {
+		d.unknown = map[string]bool{}
+	}
+	d.unknown[image] = true
+}
+
+// observe replaces the running set of image and returns the containers that
+// were not running under any image before, in listing order.
+func (d *discovery) observe(image string, ids []string, selected map[string]bool) []string {
+	if d.running == nil {
+		d.running = map[string]map[string]bool{}
+	}
+	known := func(id string) bool {
+		for _, set := range d.running {
+			if set[id] {
+				return true
+			}
+		}
+		return false
+	}
+	delete(d.unknown, image)
+	next := map[string]bool{}
+	var fresh []string
+	for _, id := range ids {
+		if selected[id] || next[id] {
+			continue
+		}
+		if !known(id) {
+			fresh = append(fresh, id)
+		}
+		next[id] = true
+	}
+	d.running[image] = next
+	return fresh
+}
+
+// list returns the discovered containers verified running in the latest
+// poll, sorted and bounded, their total, and the images that could not be
+// listed.
+func (d *discovery) list() ([]string, int, []string) {
+	all := map[string]bool{}
+	for image, set := range d.running {
+		if d.unknown[image] {
+			continue
+		}
+		for id := range set {
+			all[id] = true
+		}
+	}
+	ids := make([]string, 0, len(all))
+	for id := range all {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	var unknown []string
+	for image := range d.unknown {
+		unknown = append(unknown, image)
+	}
+	slices.Sort(unknown)
+	return ids[:min(len(ids), maxListedDiscoveries)], len(ids), unknown
 }
 
 // Freshness is computed by readers, so a crashed observer cannot leave an
@@ -58,6 +147,11 @@ func (s *Snapshot) Refresh(c Config, now time.Time) {
 		s.EventStream = "unknown"
 		for i := range s.Targets {
 			s.Targets[i].Availability = "unknown"
+		}
+		// Nothing discovered is verified any longer either.
+		s.Discovered, s.DiscoveredTotal, s.DiscoveryUnknown = nil, 0, nil
+		for _, img := range c.AgentImages {
+			s.DiscoveryUnknown = append(s.DiscoveryUnknown, img.Image)
 		}
 	}
 }
@@ -253,11 +347,58 @@ func Run(ctx context.Context, cfg Config, client *Client, once bool) (err error)
 		err = errors.Join(err, audit("observer-stop", "observer", s.Observer, "info", "selected containers were not modified"), save())
 	}()
 	var previous = make([]*resourceSample, len(cfg.Targets))
+	selected := make(map[string]bool, len(cfg.Targets))
+	for _, t := range cfg.Targets {
+		selected[t.ID] = true
+	}
+	discoveryError := ""
+	var found discovery
+	// discover reports running containers of configured agent images that
+	// nobody selected. A new autonomous workload is a separate security
+	// effect; the observer records it and changes nothing.
+	discover := func() error {
+		if len(cfg.AgentImages) == 0 {
+			return nil
+		}
+		api, err := client.Version(ctx)
+		if err != nil {
+			// The poll reports the unavailable daemon; nothing is verified.
+			for _, img := range cfg.AgentImages {
+				found.fail(img.Image)
+			}
+			s.Discovered, s.DiscoveredTotal, s.DiscoveryUnknown = found.list()
+			return nil
+		}
+		for _, img := range cfg.AgentImages {
+			ids, err := client.ContainersOfImage(ctx, api, img.Image)
+			if err != nil {
+				found.fail(img.Image)
+				if reason := safeError(err); reason != discoveryError {
+					discoveryError = reason
+					if err := audit("agent-discovery", img.Image, "unknown", "warning", reason); err != nil {
+						return err
+					}
+				}
+				continue
+			}
+			for _, id := range found.observe(img.Image, ids, selected) {
+				if err := j.Append(event.Event{ID: event.NewID("evt"), Timestamp: time.Now().UTC(), RunID: s.SessionID, Source: "docker", Type: "agent", Action: "instance.discovered", Target: id, Result: "observed", Severity: "warning",
+					Metadata: map[string]any{"reason": "running container of a configured agent image is not a selected target; provenance unknown, lifecycle unchanged", "image": img.Image, "runtime_type": img.RuntimeType, "provenance": "unknown", "trust": "observed", "mode": "observe", "enforced": false}}); err != nil {
+					return err
+				}
+			}
+		}
+		s.Discovered, s.DiscoveredTotal, s.DiscoveryUnknown = found.list()
+		return nil
+	}
 	refresh := func() error {
 		var next []TargetStatus
 		next, previous = poll(ctx, client, cfg.Targets, previous)
 		if ctx.Err() != nil {
 			return nil
+		}
+		if err := discover(); err != nil {
+			return err
 		}
 		for n, t := range next {
 			if signature(t) != signature(s.Targets[n]) {

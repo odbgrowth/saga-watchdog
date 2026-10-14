@@ -272,4 +272,173 @@ func TestStatusCannotRemainFreshAfterCrash(t *testing.T) {
 	if s.Observer != "stale" || s.Targets[0].Availability != "unknown" {
 		t.Fatal(s)
 	}
+	// Discoveries are no longer verified either.
+	c.AgentImages = []AgentImage{{Image: "ghcr.io/acme/agent", RuntimeType: "agent"}}
+	s = Snapshot{Observer: "running", UpdatedAt: time.Now().Add(-time.Minute), Discovered: []string{strings.Repeat("b", 64)}, DiscoveredTotal: 1}
+	s.Refresh(c, time.Now())
+	if len(s.Discovered) != 0 || s.DiscoveredTotal != 0 || len(s.DiscoveryUnknown) != 1 {
+		t.Fatalf("stale discoveries shown as running: %+v", s)
+	}
+}
+
+// Tests 22-24: only containers of configured agent images that nobody
+// selected are reported, with unknown provenance, and nothing is changed.
+func TestAgentImageDiscoveryIsObservationOnly(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.AgentImages = []AgentImage{{Image: "ghcr.io/acme/agent", RuntimeType: "agent"}}
+	rogue := strings.Repeat("b", 64)
+	c := fixtureClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/version":
+			fmt.Fprint(w, `{"ApiVersion":"1.56","MinAPIVersion":"1.44"}`)
+		case "/v1.56/containers/json":
+			filter := r.URL.Query().Get("filters")
+			if !strings.Contains(filter, `"ancestor":["ghcr.io/acme/agent"]`) || !strings.Contains(filter, `"running"`) {
+				t.Errorf("unexpected filter %s", filter)
+			}
+			// The selected target, an unselected agent container and a
+			// malformed ID; unrelated images are never listed by the filter.
+			fmt.Fprintf(w, `[{"Id":%q},{"Id":%q},{"Id":"short"}]`, testID, rogue)
+		case "/v1.56/containers/" + testID + "/json":
+			fmt.Fprintf(w, `{"Id":%q,"State":{"Status":"running"}}`, testID)
+		case "/v1.56/containers/" + testID + "/stats":
+			fmt.Fprintf(w, `{"id":%q,"read":"2026-10-14T09:00:00Z","memory_stats":{"usage":1,"limit":2}}`, testID)
+		default:
+			t.Errorf("unexpected endpoint %s", r.URL.Path)
+			w.WriteHeader(404)
+		}
+	})
+	if err := Run(context.Background(), cfg, c, true); err != nil {
+		t.Fatal(err)
+	}
+	var b strings.Builder
+	if err := CopyHistory(cfg.StateDir, &b); err != nil {
+		t.Fatal(err)
+	}
+	history := b.String()
+	if strings.Count(history, `"action":"instance.discovered"`) != 1 || !strings.Contains(history, `"target":"`+rogue+`"`) || !strings.Contains(history, `"provenance":"unknown"`) || !strings.Contains(history, `"enforced":false`) {
+		t.Fatalf("discovery history: %s", history)
+	}
+	if strings.Contains(history, `"instance.discovered","target":"`+testID) {
+		t.Fatal("selected target reported as an unknown agent")
+	}
+	s, err := ReadSnapshot(cfg)
+	if err != nil || len(s.Discovered) != 1 || s.Discovered[0] != rogue {
+		t.Fatalf("snapshot: %v %+v", err, s.Discovered)
+	}
+	// Without agent_images nothing is listed at all.
+	plain := testConfig(t)
+	c = fixtureClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1.56/containers/json" {
+			t.Error("containers listed without agent_images")
+		}
+		switch r.URL.Path {
+		case "/version":
+			fmt.Fprint(w, `{"ApiVersion":"1.56"}`)
+		default:
+			fmt.Fprintf(w, `{"Id":%q,"State":{"Status":"exited"}}`, testID)
+		}
+	})
+	if err := Run(context.Background(), plain, c, true); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Container churn never blinds discovery: every new container is reported,
+// a returning one is reported again, and only the snapshot list is bounded.
+func TestDiscoveryReportsChurnAndBoundsOnlyTheList(t *testing.T) {
+	id := func(n int) string { return fmt.Sprintf("%064x", n) }
+	selected := map[string]bool{id(0): true}
+	var d discovery
+	reported := 0
+	for pass := range 5 {
+		var ids []string
+		for n := range 100 {
+			ids = append(ids, id(pass*100+n))
+		}
+		ids = append(ids, id(0), id(pass*100)) // a selected target and a duplicate
+		fresh := d.observe("ghcr.io/acme/agent", ids, selected)
+		if len(fresh) != 99+boolInt(pass > 0) {
+			t.Fatalf("pass %d: %d new containers reported", pass, len(fresh))
+		}
+		reported += len(fresh)
+		list, total, _ := d.list()
+		if len(list) != maxListedDiscoveries || total != 100-boolInt(pass == 0) {
+			t.Fatalf("pass %d: list %d of %d", pass, len(list), total)
+		}
+	}
+	if reported != 499 {
+		t.Fatalf("reported %d", reported)
+	}
+	// A container under a second image is not reported twice; one that stops
+	// and returns is reported again.
+	if fresh := d.observe("vllm/vllm-openai", []string{id(401)}, selected); len(fresh) != 0 {
+		t.Fatalf("container reported again under another image: %v", fresh)
+	}
+	d.observe("ghcr.io/acme/agent", nil, selected)
+	d.observe("vllm/vllm-openai", nil, selected)
+	if fresh := d.observe("ghcr.io/acme/agent", []string{id(401)}, selected); len(fresh) != 1 {
+		t.Fatalf("returning container not reported: %v", fresh)
+	}
+	// A failed listing marks the image unknown: its earlier containers are
+	// not shown as running, and are not reported again when it recovers.
+	d.fail("ghcr.io/acme/agent")
+	if list, total, unknown := d.list(); len(list) != 0 || total != 0 || len(unknown) != 1 {
+		t.Fatalf("stale discovery shown as current: %v %d %v", list, total, unknown)
+	}
+	if fresh := d.observe("ghcr.io/acme/agent", []string{id(401)}, selected); len(fresh) != 0 {
+		t.Fatalf("unchanged container reported again after recovery: %v", fresh)
+	}
+	if list, _, unknown := d.list(); len(list) != 1 || len(unknown) != 0 {
+		t.Fatalf("recovered image: %v %v", list, unknown)
+	}
+}
+
+func boolInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// Every running agent container is reported, also beyond the snapshot list
+// bound; overlapping images and selected targets never inflate the total.
+func TestDiscoveryReportsEveryContainerOnce(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.AgentImages = []AgentImage{{Image: "ghcr.io/acme/agent", RuntimeType: "agent"}, {Image: "ghcr.io/acme/agent:v2", RuntimeType: "agent"}}
+	const running = 300
+	c := fixtureClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/version":
+			fmt.Fprint(w, `{"ApiVersion":"1.56","MinAPIVersion":"1.44"}`)
+		case "/v1.56/containers/json":
+			// Both images match the same containers, and the selected
+			// target is among them.
+			items := []string{fmt.Sprintf(`{"Id":%q}`, testID)}
+			for n := 1; n <= running; n++ {
+				items = append(items, fmt.Sprintf(`{"Id":"%064x"}`, n))
+			}
+			fmt.Fprint(w, "["+strings.Join(items, ",")+"]")
+		case "/v1.56/containers/" + testID + "/json":
+			fmt.Fprintf(w, `{"Id":%q,"State":{"Status":"running"}}`, testID)
+		case "/v1.56/containers/" + testID + "/stats":
+			fmt.Fprintf(w, `{"id":%q,"read":"2026-10-14T09:00:00Z","memory_stats":{"usage":1,"limit":2}}`, testID)
+		default:
+			w.WriteHeader(404)
+		}
+	})
+	if err := Run(context.Background(), cfg, c, true); err != nil {
+		t.Fatal(err)
+	}
+	var b strings.Builder
+	if err := CopyHistory(cfg.StateDir, &b); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(b.String(), `"action":"instance.discovered"`); got != running {
+		t.Fatalf("%d containers reported, want each of %d once", got, running)
+	}
+	s, err := ReadSnapshot(cfg)
+	if err != nil || len(s.Discovered) != maxListedDiscoveries || s.DiscoveredTotal != running {
+		t.Fatalf("snapshot: %v listed %d of %d", err, len(s.Discovered), s.DiscoveredTotal)
+	}
 }

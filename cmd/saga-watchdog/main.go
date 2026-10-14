@@ -38,8 +38,9 @@ Usage:
   saga-watchdog report [--run ID] [--json]
   saga-watchdog pause|resume|kill <run-id>
   saga-watchdog grant [--run ID] network <host> | tool <server/tool>
-  saga-watchdog check --type TYPE --action ACTION --target TARGET [--run ID]
-  saga-watchdog emit --type TYPE --action ACTION --target TARGET --result RESULT [--run ID]
+  saga-watchdog authority status | history | clear (--id ID | --all) --reason TEXT
+  saga-watchdog check --type TYPE --action ACTION --target TARGET [--host H] [--runtime-type T] [--run ID]
+  saga-watchdog emit --type TYPE --action ACTION --target TARGET --result RESULT [--host H] [--runtime-type T] [--instance ID] [--run ID]
   saga-watchdog claude config | setup [--local] | remove [--local] | doctor
   saga-watchdog codex  config | setup | remove | doctor
   saga-watchdog gemini config | setup | remove | doctor
@@ -84,7 +85,7 @@ func cli(args []string) int {
 	g, err := gitinfo.Inspect(cwd)
 	if err != nil {
 		switch args[0] {
-		case "status", "events", "report", "check", "emit", "pause", "resume", "kill", "grant":
+		case "status", "events", "report", "check", "emit", "pause", "resume", "kill", "grant", "authority":
 			// Controls must still work from the original project root if Git metadata
 			// was deleted or corrupted. They contact a live supervisor, never a PID.
 			root, resolveErr := filepath.EvalSymlinks(cwd)
@@ -117,6 +118,12 @@ func cli(args []string) int {
 		fmt.Println("Created", p)
 		fmt.Println("Inspect the policy, then run: saga-watchdog doctor")
 		return 0
+	case "authority":
+		c, _, err := load(g.Root)
+		if err != nil {
+			return fail(err)
+		}
+		return authorityCLI(g, c, args[1:])
 	case "validate", "doctor", "run":
 		c, hash, err := load(g.Root)
 		if err != nil {
@@ -230,6 +237,9 @@ func doctor(g gitinfo.Info, c config.Config) int {
 	if !hooked {
 		fmt.Println("! No preventive agent hook; supervision and observation only (optional: saga-watchdog claude|codex|gemini setup)")
 	}
+	if doctorAuthority(g, c) != 0 {
+		code = 2
+	}
 	fmt.Println("! File READ monitoring and raw network enforcement are unavailable")
 	fmt.Println("! Integrations report events; they do not prove OS actions occurred")
 	fmt.Println("! Same-user separation is not a sandbox; detached processes can escape the group")
@@ -249,8 +259,11 @@ func query(g gitinfo.Info, op string, args []string) int {
 		f.StringVar(&input.Type, "type", "", "event type")
 		f.StringVar(&input.Action, "action", "", "action")
 		f.StringVar(&input.Target, "target", "", "target")
+		f.StringVar(&input.Host, "host", "", "host a runtime starts or executes on (agent, runtime, inference, remote events)")
+		f.StringVar(&input.RuntimeType, "runtime-type", "", "agent, worker, model-server or inference-endpoint")
 		if op == "emit" {
 			f.StringVar(&input.Result, "result", "", "observed result")
+			f.StringVar(&input.Instance, "instance", "", "instance a stop ends or a start report confirms, as returned for its start check")
 		}
 	}
 	if err := f.Parse(args); err != nil {
@@ -330,6 +343,18 @@ func printRun(r store.Run) {
 	}
 	if len(r.Grants) > 0 {
 		fmt.Printf("Grants    %s\n", event.Redact(strings.Join(r.Grants, ", ")))
+	}
+	if r.Instance != nil {
+		line := r.Instance.ID + " (provenance " + r.Instance.Provenance
+		if r.Instance.ParentID != "" {
+			line += ", parent " + r.Instance.ParentID
+		}
+		fmt.Printf("Instance  %s)\n", line)
+	}
+	if r.ContextID != "" {
+		fmt.Printf("Context   %s\n", r.ContextID)
+	} else if r.ContextDisabled != "" {
+		fmt.Printf("Context   none (%s)\n", r.ContextDisabled)
 	}
 }
 

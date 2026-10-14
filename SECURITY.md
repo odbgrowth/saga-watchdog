@@ -69,6 +69,32 @@ the OS user, or external services.
 Correlated events (a check, its post-action report, a filesystem change with
 matching timestamps) are not independent confirmations of each other.
 
+Coding-agent events carry `metadata.trust`: `observed` (supervisor,
+filesystem, Git), `trusted-integration` (a configured hook adapter or a
+nested saga-watchdog), `self-reported` (any other socket event) or
+`operator` (control requests). The label is a claim class, not proof.
+Self-reported events never establish identity, grant authority, clear state,
+authorize a child agent, mark provenance trusted or resume a run, and
+replication kills based only on them are capped at pause.
+
+## Authority invariants
+
+- Failure never expands authority.
+- Authority-expansion history survives model sessions, processes and runs
+  within one trusted security context: operator (from the invoking
+  environment), project (derived) and authorization context (from the
+  protected policy). A model session is never the security boundary.
+- Authority does not replicate: a child agent starts with no grants;
+  restrictions propagate through the shared context.
+- Every agent instance carries provenance; unknown provenance is not trusted.
+- Cross-host execution is a privileged effect that needs explicit policy.
+- Model output is never authority: only an operator, a trusted grant, expiry
+  or a new trusted authorization context ends a restriction, and each end is
+  audited.
+
+Without complete trusted identity, cross-run correlation is disabled rather
+than guessed. See [docs/authority.md](docs/authority.md).
+
 ## What SAGA can prevent
 
 For supported Claude Code, Codex CLI and Gemini CLI tool calls, SAGA blocks
@@ -108,6 +134,14 @@ sockets, or change another same-user process. SAGA detects and reacts to
 tampering with `.saga-watchdog.yaml` and with the settings files that carry
 the Claude hook, but process separation is not a tamper-resistant privilege
 boundary.
+
+The same applies to persistent authority state. It lives in the operator's
+private state directory, outside the project and outside the filesystem
+observer. A same-user agent could delete or edit it, unset the variables that
+mark a nested run, or invoke the CLI with another context. SAGA keeps history
+across the normal paths (new session, new run, child agent, nested run) and
+makes clearing an audited operator act; it does not make that state
+tamper-proof against the same user.
 
 For stronger isolation use OS mechanisms that fit your threat model:
 separate user identities, containers, virtual machines, sandboxing and
@@ -160,7 +194,9 @@ administrative access, not an OS-enforced read-only capability. Keep its
 service account and configuration outside the agent's authority. Observation
 can miss events during connection gaps or queue overflow; polling restores
 current state, not complete history. No container control or automatic
-intervention is implemented.
+intervention is implemented. Optional `agent_images` discovery lists running
+containers of configured images and reports unselected ones as
+`agent.instance.discovered` with unknown provenance; it changes nothing.
 
 ## Security scope for reports
 

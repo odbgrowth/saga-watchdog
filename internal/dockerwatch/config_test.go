@@ -1,6 +1,7 @@
 package dockerwatch
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -45,5 +46,30 @@ func TestConfigRejectsUnsupportedAuthority(t *testing.T) {
 				t.Fatal("accepted invalid config")
 			}
 		})
+	}
+}
+
+func TestAgentImagesConfig(t *testing.T) {
+	base := fmt.Sprintf("version: 1\nmode: observe\nstate_dir: /tmp/saga-test-state\ntargets:\n  - name: agent\n    container_id: %s\n", testID)
+	if c, err := Parse(strings.NewReader(base + "agent_images:\n  - image: ghcr.io/acme/agent\n    runtime_type: agent\n")); err != nil || len(c.AgentImages) != 1 {
+		t.Fatalf("%v %+v", err, c)
+	}
+	plain, err := Parse(strings.NewReader(base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The identity hash covers the JSON form; an unset field must not appear,
+	// or every existing observer state would belong to "another config".
+	if b, _ := json.Marshal(plain); strings.Contains(string(b), "agent_images") || strings.Contains(string(b), "AgentImages") {
+		t.Fatalf("config identity of existing configurations changed: %s", b)
+	}
+	for _, bad := range []string{
+		"agent_images:\n  - image: 'ghcr.io/acme/agent; rm'\n    runtime_type: agent\n",
+		"agent_images:\n  - image: ghcr.io/acme/agent\n    runtime_type: root\n",
+		"agent_images:\n  - image: ghcr.io/acme/agent\n    runtime_type: agent\n    auto_stop: true\n",
+	} {
+		if _, err := Parse(strings.NewReader(base + bad)); err == nil {
+			t.Errorf("accepted %q", bad)
+		}
 	}
 }

@@ -54,6 +54,8 @@ The agent reasons. SAGA does not. It watches boundaries.
 | Container health/resource observation | No | No | Yes |
 | Raw syscall interception | No | No | No |
 | Kernel network firewall | No | No | No |
+| Cross-run authority history | Yes, in a trusted context | Yes, in a trusted context | No |
+| Agent replication evidence | Hook and nested runs | Nested runs, `check` | Agent-image discovery |
 | LLM safety decisions | No | No | No |
 
 SAGA is not a sandbox, a firewall, a syscall interceptor or an EDR. It does
@@ -138,6 +140,49 @@ reproducible walkthrough. The [Codex guide](docs/codex.md) and the
 [Gemini CLI guide](docs/gemini-cli.md) cover what differs for those agents,
 including the cases where the agent itself cannot fail closed.
 
+## Security context
+
+Watchdog security state is tied to a trusted **operator + project +
+authorization context**, never to an LLM conversation, process or session ID.
+The operator comes from `SAGA_WATCHDOG_OPERATOR` when you invoke
+`saga-watchdog`, the project from its root, the authorization context from
+`security_context.authorization_context` in the protected policy. Without all
+three, cross-run correlation stays off and `doctor` says why; identity is
+never guessed.
+
+## Cross-session escalation
+
+Starting a new model session, run or agent process does not reset unresolved
+restrictions. A denial in one run becomes a bounded, expiring restriction for
+the context. A later retry, an alternate route to the same declared `effect`,
+or a new agent instance after the denial is one trajectory
+(`authority-expansion-after-denial`). Only an operator, a trusted grant,
+expiry or a new authorization context ends a restriction, and every end is
+audited. An agent cannot clear its own history.
+
+## Agent replication
+
+Starting another autonomous agent, worker or inference runtime is a separate
+security effect, authorized only by `replication` policy. Unauthorized
+same-host replication pauses the run; replication right after a denial, or a
+runtime created on another host, stops it. A `saga-watchdog run` started
+inside a supervised run must be authorized by that run.
+
+## Authority inheritance
+
+A child agent does not inherit its parent's authority. Restrictions
+propagate through the shared context; permissions and grants do not. Every
+instance carries provenance (parent, operator, context, host, run, artifact),
+and unknown provenance is never trusted.
+
+## Cross-host visibility
+
+A local Watchdog cannot see runtimes created on another machine without
+another trusted signal: an integration report, a host agent, an execution or
+network broker, or a future control plane. Network traffic alone is not
+treated as replication. See the [authority guide](docs/authority.md) for the
+invariants, data model and limits.
+
 ## Observe an existing Docker agent
 
 The Docker observer runs beside containers that already exist and never
@@ -176,6 +221,7 @@ authority even though the observer only sends read requests.
 ```text
 Project        init | validate | doctor
 Run            run -- <command> | status | events | report [--json] | pause | resume | kill | grant
+Authority      authority status | history | clear (--id ID | --all) --reason TEXT
 Integrations   check | emit
 Claude Code    claude config | setup [--local] | remove [--local] | doctor | hook
 Codex CLI      codex  config | setup | remove | doctor | hook
@@ -189,6 +235,7 @@ Run `saga-watchdog --help` for arguments.
 
 - [Coding-agent guide: supervision, observation, policy, check/emit](docs/coding-agent.md)
 - [Claude Code guide: preventive hooks](docs/claude-code.md)
+- [Authority across runs, sessions and agent instances](docs/authority.md)
 - [Codex CLI guide](docs/codex.md) and [Gemini CLI guide](docs/gemini-cli.md)
 - [Docker observer guide](docs/docker-observer.md)
 - [Shell demo](examples/DEMO.md) and [Claude Code demo](examples/claude-code.md)
