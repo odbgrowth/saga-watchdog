@@ -137,8 +137,9 @@ An unhealthy container can be successfully observed: examine `health` and
 
 A configured agent image turns a running container of that image into
 evidence of an agent instance. When it is not one of the selected targets,
-SAGA records `agent.instance.discovered` once per container and session, with
-provenance `unknown` and trust `observed`:
+SAGA records `agent.instance.discovered` when the container appears, with
+provenance `unknown` and trust `observed`. A container that stops and later
+runs again is recorded again:
 
 ```yaml
 agent_images:
@@ -150,7 +151,9 @@ agent_images:
 
 `runtime_type` is `agent`, `worker`, `model-server` or `inference-endpoint`.
 Configure at most 16 images by plain reference; the match uses Docker's
-`ancestor` filter. Status shows the containers under `discovered_agents`.
+`ancestor` filter. Status lists up to 64 running discovered containers under
+`discovered_agents`, with their number in `discovered_agents_total`; the
+history records every discovery.
 
 Discovery stays observation-only. It never stops, pauses, restarts or removes a
 container, and a discovered container is not adopted as a target. An image

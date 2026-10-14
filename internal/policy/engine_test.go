@@ -397,27 +397,47 @@ func TestReplicationRules(t *testing.T) {
 	if first, second := e.Evaluate(worker), e.Evaluate(report); first.Action != "allow" || first.Authorization != "replication.same_host_workers" || second.Action != "allow" {
 		t.Fatalf("post-action report of a counted worker counted again: %+v %+v", first, second)
 	}
-	e.Evaluate(ev("agent", "instance.stop", "never-started", "host_l", false, "worker"))
+	stop := func(target, result string) event.Event {
+		s := ev("agent", "instance.stop", target, "host_l", false, "worker")
+		s.Result = result
+		return s
+	}
+	e.Evaluate(stop("never-started", "success"))
 	if d := e.Evaluate(other); d.RuleID != "unauthorized-agent-replication" {
 		t.Fatalf("budget not enforced, or a stop of an uncounted worker freed a slot: %+v", d)
 	}
+	// Only a successful stop report frees the slot: not the pre-action check
+	// of the stop, and not a stop that failed.
 	e = New(cfg, t.TempDir())
 	e.Evaluate(worker)
-	e.Evaluate(ev("agent", "instance.stop", "test-runner", "host_l", false, "worker"))
+	for _, result := range []string{"", "failed", "denied", "blocked"} {
+		e.Evaluate(stop("test-runner", result))
+		if d := e.Evaluate(other); d.RuleID != "unauthorized-agent-replication" {
+			t.Fatalf("stop with result %q freed a live worker's slot: %+v", result, d)
+		}
+	}
+	e = New(cfg, t.TempDir())
+	e.Evaluate(worker)
+	e.Evaluate(stop("test-runner", "success"))
 	if d := e.Evaluate(other); d.Action != "allow" {
 		t.Fatalf("stopped worker slot not freed: %+v", d)
 	}
-	// A failed start or a denied check holds no slot.
-	e = New(cfg, t.TempDir())
-	failed := worker
-	failed.Result = "failed"
-	denied := other
-	denied.Result = "denied"
-	e.Evaluate(failed)
-	e.Evaluate(denied)
-	// The two reported denials themselves count toward in-run escalation.
-	if d := e.Evaluate(ev("agent", "instance.start", "test-runner-3", "host_l", false, "worker")); d.Authorization != "replication.same_host_workers" || rank(d.Action) >= rank("pause") {
-		t.Fatalf("failed or denied start consumed a slot: %+v", d)
+	// A start that did not happen holds no slot: an isolated failed or denied
+	// report takes none, and a failed report after its check releases it.
+	for _, result := range []string{"failed", "denied", "blocked"} {
+		e = New(cfg, t.TempDir())
+		isolated := other
+		isolated.Result = result
+		e.Evaluate(isolated)
+		e.Evaluate(worker)
+		failed := worker
+		failed.Result = result
+		e.Evaluate(failed)
+		// The budget authorizes the next worker; the reported failures may
+		// still escalate in-run, which is a separate concern.
+		if d := e.Evaluate(ev("agent", "instance.start", "test-runner-3", "host_l", false, "worker")); d.Authorization != "replication.same_host_workers" {
+			t.Fatalf("%s start kept a slot: %+v", result, d)
+		}
 	}
 	// Unauthorized replication right after a denial is the bypass: kill.
 	cfg.Network.Deny = []string{"prod.example.com"}

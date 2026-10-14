@@ -235,9 +235,11 @@ replication:
 
 The worker budget counts instances by target: report each worker under its
 own name. A pre-action check and the report that follows it name the same
-worker and take one slot; a failed or denied start takes none; only
-`agent.instance.stop` for a counted worker frees its slot. Stopping or
-discovering an instance never counts as an expansion.
+worker and take one slot. A start reported as `failed`, `denied` or `blocked`
+did not happen and releases its slot. Only a successful stop report
+(`emit --type agent --action instance.stop --result success`) of a counted
+worker frees a slot; the check before a stop, or a failed stop, does not.
+Stopping or discovering an instance never counts as an expansion.
 
 Watchdog stops only the run it supervises. It has no remote kill capability.
 

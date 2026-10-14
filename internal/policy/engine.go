@@ -227,18 +227,20 @@ func (e *Engine) Evaluate(ev event.Event) Decision {
 	return d
 }
 
-// reserveWorker takes a worker slot for an authorized worker start that was
-// neither denied nor reported as failed. Slots are keyed by instance, so a
-// pre-action check and its post-action report occupy one slot.
+// reserveWorker takes a worker slot for an authorized worker start. Slots are
+// keyed by instance, so a pre-action check and its post-action report occupy
+// one slot. A start reported as failed, denied or blocked did not happen and
+// releases the reservation its check took.
 func (e *Engine) reserveWorker(ev event.Event, d Decision) {
-	if d.Authorization != "replication.same_host_workers" || rank(d.Action) >= rank("pause") {
+	if d.Authorization != "replication.same_host_workers" {
 		return
 	}
-	switch ev.Result {
-	case "failed", "denied", "blocked":
-		return
+	switch {
+	case ev.Result == "failed" || ev.Result == "denied" || ev.Result == "blocked":
+		delete(e.workers, ev.Target)
+	case rank(d.Action) < rank("pause"):
+		e.workers[ev.Target] = true
 	}
-	e.workers[ev.Target] = true
 }
 
 func (e *Engine) file(ev event.Event, now time.Time) Decision {
@@ -467,8 +469,11 @@ func (e *Engine) replication(ev event.Event) Decision {
 	}
 	switch ev.Type + "." + ev.Action {
 	case "agent.instance.stop":
-		// Only a stop naming a counted worker frees its slot.
-		delete(e.workers, ev.Target)
+		// Only a reported successful stop of a counted worker frees its slot;
+		// a pre-action check or a failed stop leaves the worker running.
+		if ev.Result == "success" {
+			delete(e.workers, ev.Target)
+		}
 		return decide("allow", "", "")
 	case "agent.instance.discovered", "inference.endpoint.discovered":
 		if listed(r.AllowAgents) || slices.Contains(r.InferenceEndpoints, ev.Target) {

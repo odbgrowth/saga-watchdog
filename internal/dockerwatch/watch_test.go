@@ -336,3 +336,48 @@ func TestAgentImageDiscoveryIsObservationOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Container churn never blinds discovery: every new container is reported,
+// a returning one is reported again, and only the snapshot list is bounded.
+func TestDiscoveryReportsChurnAndBoundsOnlyTheList(t *testing.T) {
+	id := func(n int) string { return fmt.Sprintf("%064x", n) }
+	selected := map[string]bool{id(0): true}
+	var d discovery
+	reported := 0
+	for pass := range 5 {
+		var ids []string
+		for n := range 100 {
+			ids = append(ids, id(pass*100+n))
+		}
+		ids = append(ids, id(0), id(pass*100)) // a selected target and a duplicate
+		fresh := d.observe("ghcr.io/acme/agent", ids, selected)
+		if len(fresh) != 99+boolInt(pass > 0) {
+			t.Fatalf("pass %d: %d new containers reported", pass, len(fresh))
+		}
+		reported += len(fresh)
+		list, total := d.list()
+		if len(list) != maxListedDiscoveries || total != 100-boolInt(pass == 0) {
+			t.Fatalf("pass %d: list %d of %d", pass, len(list), total)
+		}
+	}
+	if reported != 499 {
+		t.Fatalf("reported %d", reported)
+	}
+	// A container under a second image is not reported twice; one that stops
+	// and returns is reported again.
+	if fresh := d.observe("vllm/vllm-openai", []string{id(401)}, selected); len(fresh) != 0 {
+		t.Fatalf("container reported again under another image: %v", fresh)
+	}
+	d.observe("ghcr.io/acme/agent", nil, selected)
+	d.observe("vllm/vllm-openai", nil, selected)
+	if fresh := d.observe("ghcr.io/acme/agent", []string{id(401)}, selected); len(fresh) != 1 {
+		t.Fatalf("returning container not reported: %v", fresh)
+	}
+}
+
+func boolInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
