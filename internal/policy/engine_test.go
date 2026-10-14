@@ -386,17 +386,38 @@ func TestReplicationRules(t *testing.T) {
 	if d := New(cfg, t.TempDir()).Evaluate(event.Event{Timestamp: epoch, Type: "network", Action: "connect", Target: "build-02"}); d.Action != "allow" {
 		t.Fatalf("network connection treated as replication: %+v", d)
 	}
-	// The worker budget is per run; a stop frees a slot.
+	// The worker budget is per run and per instance: a check and the report
+	// that follows it name one worker, and only a stop of a counted worker
+	// frees its slot.
 	e := New(cfg, t.TempDir())
 	worker := ev("agent", "instance.start", "test-runner", "host_l", false, "worker")
-	if first := e.Evaluate(worker); first.Action != "allow" || first.Authorization != "replication.same_host_workers" || e.Evaluate(worker).RuleID != "unauthorized-agent-replication" {
-		t.Fatal("worker budget not enforced")
+	other := ev("agent", "instance.start", "test-runner-2", "host_l", false, "worker")
+	report := worker
+	report.Result = "success"
+	if first, second := e.Evaluate(worker), e.Evaluate(report); first.Action != "allow" || first.Authorization != "replication.same_host_workers" || second.Action != "allow" {
+		t.Fatalf("post-action report of a counted worker counted again: %+v %+v", first, second)
+	}
+	e.Evaluate(ev("agent", "instance.stop", "never-started", "host_l", false, "worker"))
+	if d := e.Evaluate(other); d.RuleID != "unauthorized-agent-replication" {
+		t.Fatalf("budget not enforced, or a stop of an uncounted worker freed a slot: %+v", d)
 	}
 	e = New(cfg, t.TempDir())
 	e.Evaluate(worker)
 	e.Evaluate(ev("agent", "instance.stop", "test-runner", "host_l", false, "worker"))
-	if d := e.Evaluate(worker); d.Action != "allow" {
+	if d := e.Evaluate(other); d.Action != "allow" {
 		t.Fatalf("stopped worker slot not freed: %+v", d)
+	}
+	// A failed start or a denied check holds no slot.
+	e = New(cfg, t.TempDir())
+	failed := worker
+	failed.Result = "failed"
+	denied := other
+	denied.Result = "denied"
+	e.Evaluate(failed)
+	e.Evaluate(denied)
+	// The two reported denials themselves count toward in-run escalation.
+	if d := e.Evaluate(ev("agent", "instance.start", "test-runner-3", "host_l", false, "worker")); d.Authorization != "replication.same_host_workers" || rank(d.Action) >= rank("pause") {
+		t.Fatalf("failed or denied start consumed a slot: %+v", d)
 	}
 	// Unauthorized replication right after a denial is the bypass: kill.
 	cfg.Network.Deny = []string{"prod.example.com"}
@@ -404,6 +425,18 @@ func TestReplicationRules(t *testing.T) {
 	e.Evaluate(event.Event{Timestamp: epoch, Type: "network", Action: "connect", Target: "prod.example.com"})
 	if d := e.Evaluate(ev("agent", "instance.start", "codex", "host_l", false, "agent")); d.Action != "kill" || d.RuleID != "unauthorized-agent-replication" {
 		t.Fatalf("replication after denial: %+v", d)
+	}
+	// Stopping or discovering an instance after a denial reduces or reports
+	// authority; it is not an alternative route.
+	e = New(cfg, t.TempDir())
+	e.Evaluate(event.Event{Timestamp: epoch, Type: "network", Action: "connect", Target: "prod.example.com"})
+	for i := range 4 {
+		if d := e.Evaluate(ev("agent", "instance.stop", fmt.Sprintf("w%d", i), "host_l", false, "worker")); d.Action != "allow" {
+			t.Fatalf("stop after denial escalated: %+v", d)
+		}
+	}
+	if Expansion("agent", "instance.stop") || Expansion("inference", "endpoint.discovered") || !Expansion("runtime", "copy") || !ReplicationType("agent") {
+		t.Fatal("expansion classification")
 	}
 }
 

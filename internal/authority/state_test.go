@@ -2,12 +2,15 @@ package authority
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/odbgrowth/saga-watchdog/internal/event"
 )
 
 var epoch = time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC)
@@ -93,8 +96,8 @@ func TestRestrictionsPersistCorrelateExpireAndClear(t *testing.T) {
 	}{
 		"retry in a new run, new session": {Attempt{Type: "network", Target: "deploy.example.com", RunID: "run_b", SessionID: "sess-2"}, "retry in a new run"},
 		"alternate route to the effect":   {Attempt{Type: "tool", Target: "vercel/deploy", Effects: []string{"production.deploy"}, RunID: "run_b"}, "alternate route to effect production.deploy"},
-		"new agent instance":              {Attempt{Type: "agent", Target: "codex", RunID: "run_b"}, "new agent after denial"},
-		"new host":                        {Attempt{Type: "remote", Target: "deploy-agent", RunID: "run_b", HostID: "build-02"}, "new remote after denial"},
+		"new agent instance":              {Attempt{Type: "agent", Action: "instance.start", Target: "codex", RunID: "run_b"}, "new agent after denial"},
+		"new host":                        {Attempt{Type: "remote", Action: "execution.attempt", Target: "deploy-agent", RunID: "run_b", HostID: "build-02"}, "new remote after denial"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			m, ok := st.Correlate(tc.a, now)
@@ -108,6 +111,8 @@ func TestRestrictionsPersistCorrelateExpireAndClear(t *testing.T) {
 		"same run retry":            {Type: "network", Target: "deploy.example.com", RunID: "run_a"},
 		"the denial event itself":   {Type: "network", Target: "deploy.example.com", RunID: "run_b", EventID: "evt_1"},
 		"unrelated tool, no effect": {Type: "tool", Target: "github/get_issue", RunID: "run_b"},
+		"worker stop":               {Type: "agent", Action: "instance.stop", Target: "codex", RunID: "run_b"},
+		"discovered endpoint":       {Type: "inference", Action: "endpoint.discovered", Target: "0.0.0.0:8000", RunID: "run_b"},
 	} {
 		if m, ok := st.Correlate(a, now); ok && !(name == "the denial event itself" && m.Restriction.EventID != "evt_1") {
 			t.Errorf("%s correlated: %+v", name, m)
@@ -152,9 +157,23 @@ func TestResolveByGrantAndBounds(t *testing.T) {
 	}
 	for i := 0; i < maxRestrictions+10; i++ {
 		target := "host" + strings.Repeat("x", i%3) + string(rune('a'+i%26)) + "-" + time.Duration(i).String()
-		if err := s.Add(epoch.Add(time.Duration(i)*time.Second), Restriction{Rule: "network-denied", Decision: "pause", Type: "network", Target: target, RunID: "run_a", EventID: "evt"}); err != nil {
-			t.Fatal(err)
+		err := s.Add(epoch.Add(time.Duration(i)*time.Second), Restriction{Rule: "network-denied", Decision: "pause", Type: "network", Target: target, RunID: "run_a", EventID: "evt"})
+		// A full state refuses new restrictions and evicts none: the oldest
+		// unresolved denial must still correlate.
+		if (i < maxRestrictions && err != nil) || (i >= maxRestrictions && !errors.Is(err, ErrFull)) {
+			t.Fatalf("restriction %d: %v", i, err)
 		}
+	}
+	if st, _ := s.Current(); st.Restrictions[0].Target != "hosta-0s" {
+		t.Fatalf("oldest unresolved restriction evicted: %+v", st.Restrictions[0])
+	}
+	// A repeat of a recorded target is still deduplicated, not refused.
+	if err := s.Add(epoch, Restriction{Rule: "network-denied", Decision: "pause", Type: "network", Target: "hosta-0s", RunID: "run_b", EventID: "evt"}); err != nil {
+		t.Fatalf("dedupe on a full state: %v", err)
+	}
+	var history strings.Builder
+	if err := History(filepath.Dir(filepath.Dir(s.path)), testContext(), &history); err != nil || !strings.Contains(history.String(), `"action":"refused"`) {
+		t.Fatalf("refusal not audited: %v", err)
 	}
 	st, _ := s.Current()
 	if len(st.Restrictions) != maxRestrictions {
@@ -231,4 +250,67 @@ func TestHostClassification(t *testing.T) {
 	if id, remote := h.Classify("Build-02."); !remote || id != "build-02" {
 		t.Fatalf("%s %t", id, remote)
 	}
+}
+
+// Long or non-printable targets are stored bounded and still match exactly.
+func TestStoredTargetsAreBoundedAndExact(t *testing.T) {
+	long := "https://deploy.example.com/" + strings.Repeat("a", 4000)
+	other := "https://deploy.example.com/" + strings.Repeat("a", 3999) + "b"
+	for _, target := range []string{long, other, "file\nwith\x00control", "caf\u00e9/config"} {
+		got := storedTarget(target)
+		if len(got) > maxTargetBytes || strings.ContainsFunc(got, func(c rune) bool { return c < 0x20 || c > 0x7e }) {
+			t.Fatalf("unbounded stored target %q", got)
+		}
+	}
+	if storedTarget(long) == storedTarget(other) || storedTarget("api.example.com") != "api.example.com" {
+		t.Fatal("stored targets do not preserve equality")
+	}
+	s, err := Open(t.TempDir(), testContext(), time.Hour, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add(epoch, Restriction{Rule: "network-denied", Decision: "pause", Type: "network", Target: long, RunID: "run_a", EventID: "evt_1"}); err != nil {
+		t.Fatal(err)
+	}
+	st, _ := s.Current()
+	if _, ok := st.Correlate(Attempt{Type: "network", Target: long, RunID: "run_b"}, epoch); !ok {
+		t.Fatal("long target retry not correlated")
+	}
+	if m, ok := st.Correlate(Attempt{Type: "network", Target: other, RunID: "run_b"}, epoch); ok {
+		t.Fatalf("different long target correlated: %+v", m)
+	}
+	if resolved, err := s.Resolve(epoch, "network", long, "human:onno", "grant"); err != nil || len(resolved) != 1 {
+		t.Fatalf("grant of a long target: %v %+v", err, resolved)
+	}
+}
+
+// The largest state the bounds allow fits under the reader's limit, so the
+// writer never installs a file the next run would refuse as corrupt.
+func TestWorstCaseStateFitsTheReader(t *testing.T) {
+	s, err := Open(t.TempDir(), testContext(), time.Hour, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	quoted := func(n int) string { return strings.Repeat(`"`, n) } // escapes to two bytes each
+	var effects []string
+	for i := range 64 {
+		effects = append(effects, fmt.Sprintf("%02d", i)+strings.Repeat("e", 62))
+	}
+	st := State{Version: 1, Context: testContext(), Updated: epoch}
+	for range maxRestrictions {
+		r := Restriction{ID: event.NewID("rst"), Rule: "cross-host-authority-expansion", Decision: "kill", Type: "inference", Target: storedTarget(quoted(4096)), Effects: effects,
+			RunID: event.NewID("run"), EventID: event.NewID("evt"), InstanceID: NewInstanceID(), SessionID: quoted(128), HostID: quoted(253), Created: epoch, Expires: epoch, Attempts: 1 << 30}
+		for range maxRelated {
+			r.Related = append(r.Related, Link{At: epoch, RunID: event.NewID("run"), EventID: event.NewID("evt"), InstanceID: NewInstanceID(), SessionID: quoted(128), HostID: quoted(253), Type: "inference", Target: storedTarget(quoted(4096)), Correlation: "alternate route to effect " + effects[0]})
+		}
+		st.Restrictions = append(st.Restrictions, r)
+	}
+	if err := s.write(st); err != nil {
+		t.Fatalf("worst-case state refused: %v", err)
+	}
+	if _, err := s.read(); err != nil {
+		t.Fatalf("worst-case state unreadable: %v", err)
+	}
+	info, _ := os.Stat(s.path)
+	t.Logf("worst-case state: %d bytes of %d", info.Size(), maxStateBytes)
 }

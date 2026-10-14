@@ -1,6 +1,9 @@
 package authority
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,19 +11,51 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"sort"
+	"strings"
 	"time"
 
 	"github.com/odbgrowth/saga-watchdog/internal/event"
 	"github.com/odbgrowth/saga-watchdog/internal/policy"
 )
 
+// Bounds keep the state file small enough to reread on every change. With
+// targets bounded by storedTarget and identifiers bounded by the control
+// socket, a full state stays below maxStateBytes (see the worst-case test);
+// the writer still refuses to install anything larger, so the reader never
+// rejects Watchdog's own output. Every trajectory step is also in the audit
+// log, so the rolling window of related steps loses no evidence.
 const (
 	maxRestrictions = 256
-	maxRelated      = 16
-	maxStateBytes   = 1 << 20
+	maxRelated      = 8
+	maxTargetBytes  = 256
+	maxStateBytes   = 8 << 20
 	maxLogBytes     = 1 << 20
 )
+
+// ErrFull reports that a context holds the maximum number of unresolved
+// restrictions. Nothing is evicted to make room: an unresolved restriction
+// ends only by expiry, a trusted grant or an operator clearing it.
+var ErrFull = errors.New("authority state is full; review it with: saga-watchdog authority status")
+
+// storedTarget bounds a target for storage. A short printable-ASCII target is
+// kept as is. Any other keeps a readable prefix and a digest of the whole, so
+// equal targets still match exactly and the stored form is at most
+// maxTargetBytes of printable ASCII.
+func storedTarget(t string) string {
+	printable := !strings.ContainsFunc(t, func(c rune) bool { return c < 0x20 || c > 0x7e })
+	if len(t) <= maxTargetBytes && printable {
+		return t
+	}
+	sum := sha256.Sum256([]byte(t))
+	suffix := "...sha256:" + hex.EncodeToString(sum[:16])
+	prefix := []byte(t[:min(len(t), maxTargetBytes-len(suffix))])
+	for i, c := range prefix {
+		if c < 0x20 || c > 0x7e {
+			prefix[i] = '?'
+		}
+	}
+	return string(prefix) + suffix
+}
 
 // Restriction is an unresolved denial that outlives its run. It holds
 // metadata only: rule, target, identifiers and times.
@@ -65,7 +100,7 @@ type State struct {
 
 // Attempt describes an event that may continue an earlier trajectory.
 type Attempt struct {
-	Type, Target                          string
+	Type, Action, Target                  string
 	Effects                               []string
 	EventID, RunID, InstanceID, SessionID string
 	HostID                                string
@@ -80,8 +115,13 @@ type Match struct {
 // Correlate finds the unexpired restriction an attempt continues, if any. Only
 // observable policy facts count: the same target in another run, a target in
 // the same declared effect, or a new agent instance, runtime, endpoint or host
-// while any restriction is unresolved. Intent is never inferred.
+// while any restriction is unresolved. Intent is never inferred. Stopping an
+// instance or discovering one the run did not create continues nothing.
 func (s State) Correlate(a Attempt, now time.Time) (Match, bool) {
+	if policy.ReplicationType(a.Type) && !policy.Expansion(a.Type, a.Action) {
+		return Match{}, false
+	}
+	target := storedTarget(a.Target)
 	var best Match
 	priority := 0
 	for _, r := range s.Restrictions {
@@ -90,13 +130,13 @@ func (s State) Correlate(a Attempt, now time.Time) (Match, bool) {
 		}
 		p, kind := 0, ""
 		switch {
-		case r.Type == a.Type && r.Target == a.Target && r.RunID != a.RunID:
+		case r.Type == a.Type && r.Target == target && r.RunID != a.RunID:
 			// Retries inside the run that earned the restriction are the base
 			// rule's and the in-run window's concern.
 			p, kind = 3, "retry in a new run"
 		case shared(r.Effects, a.Effects) != "":
 			p, kind = 2, "alternate route to effect "+shared(r.Effects, a.Effects)
-		case policy.Expansion(a.Type):
+		case policy.Expansion(a.Type, a.Action):
 			p, kind = 1, "new "+a.Type+" after denial"
 		}
 		if p > priority || (p == priority && p > 0 && r.Created.After(best.Restriction.Created)) {
@@ -173,9 +213,16 @@ func (s *Store) read() (State, error) {
 }
 
 func (s *Store) write(st State) error {
-	data, err := json.MarshalIndent(st, "", "  ")
-	if err != nil {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(st); err != nil {
 		return err
+	}
+	data := buf.Bytes()
+	if len(data) > maxStateBytes {
+		return ErrFull
 	}
 	f, err := os.CreateTemp(filepath.Dir(s.path), ".state-")
 	if err != nil {
@@ -261,25 +308,30 @@ func (s *Store) Update(now time.Time, fn func(*State) error) ([]Restriction, err
 
 // Add records a denial as a restriction unless an unexpired one with the same
 // rule and target already exists. Serious (kill) restrictions are kept longer.
+// A full state refuses the new restriction with ErrFull, audited, and keeps
+// every unresolved one; the caller fails closed.
 func (s *Store) Add(now time.Time, r Restriction) error {
+	r.Target = storedTarget(r.Target)
 	_, err := s.Update(now, func(st *State) error {
 		for _, existing := range st.Restrictions {
 			if existing.Rule == r.Rule && existing.Type == r.Type && existing.Target == r.Target {
 				return nil
 			}
 		}
-		r.ID = event.NewID("rst")
 		r.Created = now
 		r.Attempts = 1
+		if len(st.Restrictions) >= maxRestrictions {
+			if err := s.audit(now, "refused", r, "", "state full: "+r.Rule+" denied "+r.Type+" "+r.Target); err != nil {
+				return err
+			}
+			return ErrFull
+		}
+		r.ID = event.NewID("rst")
 		r.Expires = now.Add(s.retention)
 		if r.Decision == "kill" {
 			r.Expires = now.Add(s.serious)
 		}
 		st.Restrictions = append(st.Restrictions, r)
-		if len(st.Restrictions) > maxRestrictions {
-			sort.Slice(st.Restrictions, func(i, j int) bool { return st.Restrictions[i].Created.Before(st.Restrictions[j].Created) })
-			st.Restrictions = st.Restrictions[len(st.Restrictions)-maxRestrictions:]
-		}
 		return s.audit(now, "restricted", r, "", r.Rule+" denied "+r.Type+" "+r.Target)
 	})
 	return err
@@ -294,6 +346,7 @@ func (s *Store) Attempt(now time.Time, id string, l Link) error {
 				continue
 			}
 			r.Attempts++
+			l.Target = storedTarget(l.Target)
 			r.Related = append(r.Related, l)
 			if len(r.Related) > maxRelated {
 				r.Related = r.Related[len(r.Related)-maxRelated:]
@@ -334,7 +387,7 @@ func (s *Store) Resolve(now time.Time, typeID, target, who, reason string) ([]Re
 	_, err := s.Update(now, func(st *State) error {
 		kept := st.Restrictions[:0]
 		for _, r := range st.Restrictions {
-			if r.Type == typeID && r.Target == target {
+			if r.Type == typeID && r.Target == storedTarget(target) {
 				resolved = append(resolved, r)
 				if err := s.audit(now, "resolved", r, who, reason); err != nil {
 					return err

@@ -89,14 +89,19 @@ mode records would-actions but persists nothing.
 
 A restriction holds metadata only: rule, decision, event type, target, the
 declared effects it belongs to, the run, event, instance, model session and
-host that earned it, timestamps, an attempt count and up to 16 later
-trajectory steps. Never prompts, chain-of-thought, secrets or contents.
+host that earned it, timestamps, an attempt count and the 8 most recent
+trajectory steps; every step is also in the audit log. A target longer than
+256 bytes, or with characters outside printable ASCII, is stored as a prefix
+plus a SHA-256 digest of the whole, so it still matches exactly. Never
+prompts, chain-of-thought, secrets or contents.
 
 Storage is a JSON file per context in the project's private state directory,
 next to its runs (`<state>/<project>/contexts/<context>.json`), written
 atomically under a file lock so a parent run and a nested child run can share
-it. It holds at most 256 restrictions. A file that cannot be read safely stops
-the run from starting; it is never silently replaced.
+it. It holds at most 256 unresolved restrictions. A full state evicts
+nothing: a new restriction is refused, the refusal is audited and the run
+stops, until expiry or an operator makes room. A file that cannot be read
+safely stops the run from starting; it is never silently replaced.
 
 Restrictions end only through:
 
@@ -227,6 +232,12 @@ replication:
 | Agent or runtime created on an unlisted host | Stop the source run (`cross-host-authority-expansion`) |
 | Agent instance discovered without known provenance | Warn (`unattributed-agent-instance`) |
 | Network traffic to another host | Not replication; network rules apply |
+
+The worker budget counts instances by target: report each worker under its
+own name. A pre-action check and the report that follows it name the same
+worker and take one slot; a failed or denied start takes none; only
+`agent.instance.stop` for a counted worker frees its slot. Stopping or
+discovering an instance never counts as an expansion.
 
 Watchdog stops only the run it supervises. It has no remote kill capability.
 

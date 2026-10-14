@@ -372,7 +372,7 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 		if hostID == "" {
 			hostID = host.ID
 		}
-		return authority.Attempt{Type: e.Type, Target: canonical(e), Effects: engine.Effects(e), EventID: e.ID, RunID: r.ID, InstanceID: inst.ID, SessionID: session, HostID: hostID}
+		return authority.Attempt{Type: e.Type, Action: e.Action, Target: canonical(e), Effects: engine.Effects(e), EventID: e.ID, RunID: r.ID, InstanceID: inst.ID, SessionID: session, HostID: hostID}
 	}
 	// trajectory continues restrictions earned earlier in the same trusted
 	// context: across runs, model sessions, agent instances and hosts. It only
@@ -395,11 +395,11 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 		switch {
 		case attempts >= c.Escalation.KillAfter:
 			action = "kill"
-		case policy.Expansion(e.Type) && base.Authorization != "":
+		case policy.Expansion(e.Type, e.Action) && base.Authorization != "":
 			// An authorized new instance in a restricted context: the
 			// restrictions apply to it; it is evidence, not a violation.
 			action = "warn"
-		case policy.Expansion(e.Type):
+		case policy.Expansion(e.Type, e.Action):
 			// Unauthorized replication after a denial is the bypass itself.
 			action = "kill"
 		}
@@ -416,7 +416,7 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 	}
 	// Kills from replication evidence need more than the agent's own word.
 	capSelfReported := func(e event.Event, d policy.Decision) policy.Decision {
-		if d.Action == "kill" && trustOf(e) == "self-reported" && (policy.Expansion(e.Type) || d.RuleID == "authority-expansion-after-denial") {
+		if d.Action == "kill" && trustOf(e) == "self-reported" && (policy.ReplicationType(e.Type) || d.RuleID == "authority-expansion-after-denial") {
 			d = policy.Decide("pause", d.RuleID, d.Reason+" (self-reported evidence: capped at pause)")
 		}
 		return d
@@ -651,7 +651,7 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 				e.Metadata["operation"] = request.Operation
 				e.ID = event.NewID("evt")
 				creation := false
-				if policy.Expansion(e.Type) {
+				if policy.ReplicationType(e.Type) {
 					// Normalize where the runtime runs and what kind it is; both
 					// are claims that can only narrow replication policy.
 					hostID, remote := host.Classify(request.Event.Host)

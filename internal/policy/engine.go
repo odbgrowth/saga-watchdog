@@ -45,9 +45,11 @@ type Engine struct {
 	// shellCounted records that the shell follow-up for the latest genuine
 	// denial has been counted; only a new denial makes the shell count again.
 	shellCounted bool
-	// workers counts same-host worker instances this run started and has not
-	// reported stopped, bounded by replication.same_host_workers.
-	workers int
+	// workers holds the same-host worker instances, by target, that this run
+	// started and has not reported stopped. It never exceeds
+	// replication.same_host_workers. A check and the report that follows it
+	// name the same instance and count once.
+	workers map[string]bool
 }
 
 // maxGrants bounds operator grants for one run. With targets bounded by the
@@ -74,7 +76,7 @@ func New(cfg config.Config, root string, controls ...string) *Engine {
 		effects[name] = append([]string(nil), patterns...)
 	}
 	cfg.Effects = effects
-	return &Engine{cfg: cfg, root: root, controls: append([]string(nil), controls...), grants: map[string]struct{}{}}
+	return &Engine{cfg: cfg, root: root, controls: append([]string(nil), controls...), grants: map[string]struct{}{}, workers: map[string]bool{}}
 }
 
 // Grant authorizes one network host or tool identifier for the rest of the
@@ -197,7 +199,7 @@ func (e *Engine) Evaluate(ev event.Event) Decision {
 			}
 		}
 	}
-	if Expansion(ev.Type) {
+	if ReplicationType(ev.Type) {
 		base = e.replication(ev)
 		if base.RuleID == "unauthorized-agent-replication" && len(e.denials) > 0 {
 			// Replication right after a denial is the route around it.
@@ -216,11 +218,27 @@ func (e *Engine) Evaluate(ev event.Event) Decision {
 		denied = true
 	}
 	escalation := e.escalate(ev, now, denied)
+	d := base
 	if rank(escalation.Action) > rank(base.Action) || (base.RuleID == "" && escalation.RuleID != "") {
 		escalation.Authorization = base.Authorization
-		return escalation
+		d = escalation
 	}
-	return base
+	e.reserveWorker(ev, d)
+	return d
+}
+
+// reserveWorker takes a worker slot for an authorized worker start that was
+// neither denied nor reported as failed. Slots are keyed by instance, so a
+// pre-action check and its post-action report occupy one slot.
+func (e *Engine) reserveWorker(ev event.Event, d Decision) {
+	if d.Authorization != "replication.same_host_workers" || rank(d.Action) >= rank("pause") {
+		return
+	}
+	switch ev.Result {
+	case "failed", "denied", "blocked":
+		return
+	}
+	e.workers[ev.Target] = true
 }
 
 func (e *Engine) file(ev event.Event, now time.Time) Decision {
@@ -323,7 +341,7 @@ func (e *Engine) escalate(ev event.Event, now time.Time, denied bool) Decision {
 			}
 		}
 		switch {
-		case ev.Type == "credential" || ev.Type == "tool" || Expansion(ev.Type):
+		case ev.Type == "credential" || ev.Type == "tool" || Expansion(ev.Type, ev.Action):
 			// A new agent instance, runtime or host after a denial is an
 			// alternative route as well.
 			count = !repeated
@@ -386,10 +404,16 @@ func appendBounded(items []observation, item observation, limit int) []observati
 	return append(items, item)
 }
 
-// Expansion reports the event types that create or reach another agent
-// instance, runtime or host.
-func Expansion(typeID string) bool {
+// ReplicationType reports the event types decided by replication policy.
+func ReplicationType(typeID string) bool {
 	return typeID == "agent" || typeID == "runtime" || typeID == "inference" || typeID == "remote"
+}
+
+// Expansion reports events that create or reach another agent instance,
+// runtime, endpoint or host. Stopping an instance reduces authority and a
+// discovery reports one the run did not create; neither is an expansion.
+func Expansion(typeID, action string) bool {
+	return ReplicationType(typeID) && !strings.HasSuffix(action, ".stop") && !strings.HasSuffix(action, ".discovered")
 }
 
 // persistable are the rules whose denials outlive a run when persistent
@@ -443,9 +467,8 @@ func (e *Engine) replication(ev event.Event) Decision {
 	}
 	switch ev.Type + "." + ev.Action {
 	case "agent.instance.stop":
-		if runtimeType == "worker" && e.workers > 0 {
-			e.workers--
-		}
+		// Only a stop naming a counted worker frees its slot.
+		delete(e.workers, ev.Target)
 		return decide("allow", "", "")
 	case "agent.instance.discovered", "inference.endpoint.discovered":
 		if listed(r.AllowAgents) || slices.Contains(r.InferenceEndpoints, ev.Target) {
@@ -476,9 +499,12 @@ func (e *Engine) replication(ev event.Event) Decision {
 		}
 		return decide("pause", "unauthorized-agent-replication", "inference endpoint "+ev.Target+" is not listed in replication.inference_endpoints")
 	}
-	if runtimeType == "worker" && e.workers < r.SameHostWorkers {
-		e.workers++
-		return Decision{Action: "allow", Authorization: "replication.same_host_workers", Severity: "info", Reason: fmt.Sprintf("worker %d of %d authorized by replication.same_host_workers", e.workers, r.SameHostWorkers)}
+	if runtimeType == "worker" && (e.workers[ev.Target] || len(e.workers) < r.SameHostWorkers) {
+		inUse := len(e.workers)
+		if !e.workers[ev.Target] {
+			inUse++
+		}
+		return Decision{Action: "allow", Authorization: "replication.same_host_workers", Severity: "info", Reason: fmt.Sprintf("worker %s authorized by replication.same_host_workers (%d of %d)", ev.Target, inUse, r.SameHostWorkers)}
 	}
 	if listed(r.AllowAgents) {
 		return Decision{Action: "allow", Authorization: "replication.allow_agents", Severity: "info", Reason: "runtime authorized by replication.allow_agents"}
