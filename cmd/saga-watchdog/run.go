@@ -181,6 +181,11 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 	// Producer claims from a configured hook adapter, or from a nested
 	// saga-watchdog, are trusted-integration evidence; any other socket event
 	// is self-reported. Labels never grant authority.
+	// assigned holds the instance an allowed check gave a start until the
+	// report of that start names it. Bounded; a report beyond the bound gets
+	// an instance of its own.
+	const maxAssigned = 256
+	assigned := map[string]*authority.Instance{}
 	trustedProducers := map[string]bool{"saga-watchdog": true}
 	for _, spec := range integrations.Specs {
 		for _, file := range spec.Files {
@@ -703,16 +708,31 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 					hostID, _ := e.Metadata["host_id"].(string)
 					remote, _ := e.Metadata["remote"].(bool)
 					runtimeType, _ := e.Metadata["runtime_type"].(string)
-					child = &authority.Instance{ID: authority.NewInstanceID(), ParentID: inst.ID, PrincipalID: "agent:" + e.Target, HostID: hostID, RuntimeType: runtimeType, Provenance: "unknown"}
-					if allowed {
-						child.AuthorizedByRule = base.Authorization
-						if authStore != nil {
-							child.OperatorID, child.ProjectID, child.AuthorizationContextID, child.ContextID = secCtx.OperatorID, secCtx.ProjectID, secCtx.AuthorizationContextID, secCtx.ID()
-						}
-						if authStore != nil && !remote && trustOf(e) == "trusted-integration" && e.Metadata["producer"] == "saga-watchdog" {
-							child.Provenance = "trusted"
+					// The report of a start names the instance its check was
+					// assigned: one start is one instance. A later check is a
+					// new start and gets a new instance.
+					key := strings.Join([]string{hostID, e.Type, e.Action, e.Target}, "\x00")
+					if request.Operation == "emit" {
+						child = assigned[key]
+						delete(assigned, key)
+					}
+					if child == nil {
+						child = &authority.Instance{ID: authority.NewInstanceID(), ParentID: inst.ID, PrincipalID: "agent:" + e.Target, HostID: hostID, RuntimeType: runtimeType, Provenance: "unknown"}
+						if allowed {
+							child.AuthorizedByRule = base.Authorization
+							if authStore != nil {
+								child.OperatorID, child.ProjectID, child.AuthorizationContextID, child.ContextID = secCtx.OperatorID, secCtx.ProjectID, secCtx.AuthorizationContextID, secCtx.ID()
+							}
+							if authStore != nil && !remote && trustOf(e) == "trusted-integration" && e.Metadata["producer"] == "saga-watchdog" {
+								child.Provenance = "trusted"
+							}
 						}
 					}
+					if allowed && request.Operation == "check" && len(assigned) < maxAssigned {
+						assigned[key] = child
+					}
+				}
+				if child != nil {
 					e.Metadata["child_instance_id"], e.Metadata["provenance"], e.Metadata["authorized_by_rule"] = child.ID, child.Provenance, child.AuthorizedByRule
 				}
 				if err := record(e, d); err != nil {

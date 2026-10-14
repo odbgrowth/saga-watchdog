@@ -112,7 +112,9 @@ Restrictions end only through:
 - **Operator clearing**: `saga-watchdog authority clear`.
 - **A new trusted authorization context** or removing the project's state.
 
-Each end is recorded in the context's audit log.
+Each end is recorded in the context's audit log, and only after the state
+change is committed: a clear or expiry whose write fails is not reported as
+done.
 
 ## Rule: authority-expansion-after-denial
 
@@ -239,6 +241,8 @@ worker and take one slot. A start reported as `failed`, `denied` or `blocked`
 did not happen and releases its slot. Only a successful stop report
 (`emit --type agent --action instance.stop --result success`) of a counted
 worker frees a slot; the check before a stop, or a failed stop, does not.
+A failed report never frees the slot of a worker that already runs. The
+check of a start and its report also name one instance ID.
 Stopping or discovering an instance never counts as an expansion.
 
 Watchdog stops only the run it supervises. It has no remote kill capability.

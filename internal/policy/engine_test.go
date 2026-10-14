@@ -422,6 +422,37 @@ func TestReplicationRules(t *testing.T) {
 	if d := e.Evaluate(other); d.Action != "allow" {
 		t.Fatalf("stopped worker slot not freed: %+v", d)
 	}
+	// A failed duplicate start of a worker that already runs keeps the running
+	// worker's slot.
+	for _, result := range []string{"failed", "denied", "blocked"} {
+		e = New(cfg, t.TempDir())
+		e.Evaluate(worker)
+		e.Evaluate(report)
+		e.Evaluate(worker)
+		duplicate := worker
+		duplicate.Result = result
+		e.Evaluate(duplicate)
+		if d := e.Evaluate(other); d.RuleID != "unauthorized-agent-replication" {
+			t.Fatalf("%s duplicate start freed a running worker's slot: %+v", result, d)
+		}
+	}
+	// A pre-action check marked by the supervisor is never a report, even when
+	// a paused run records it as denied.
+	e = New(cfg, t.TempDir())
+	e.Evaluate(worker)
+	e.Evaluate(report)
+	pausedCheck := worker
+	pausedCheck.Result = "denied"
+	pausedCheck.Metadata = map[string]any{"host_id": "host_l", "remote": false, "runtime_type": "worker", "operation": "check"}
+	e.Evaluate(pausedCheck)
+	if d := e.Evaluate(other); d.RuleID != "unauthorized-agent-replication" {
+		t.Fatalf("denied check released a running worker's slot: %+v", d)
+	}
+	e = New(cfg, t.TempDir())
+	e.Evaluate(pausedCheck)
+	if d := e.Evaluate(other); d.Authorization != "replication.same_host_workers" {
+		t.Fatalf("a check denied by a paused run reserved a slot: %+v", d)
+	}
 	// A start that did not happen holds no slot: an isolated failed or denied
 	// report takes none, and a failed report after its check releases it.
 	for _, result := range []string{"failed", "denied", "blocked"} {

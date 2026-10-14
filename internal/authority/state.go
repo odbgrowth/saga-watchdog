@@ -183,7 +183,7 @@ func Open(dir string, ctx Context, retention, serious time.Duration) (*Store, er
 	}
 	id := ctx.ID()
 	s := &Store{ctx: ctx, path: filepath.Join(dir, id+".json"), log: filepath.Join(dir, id+".events.jsonl"), lock: filepath.Join(dir, id+".lock"), retention: retention, serious: serious}
-	if _, err := s.Update(time.Now().UTC(), func(*State) error { return nil }); err != nil {
+	if _, err := s.update(time.Now().UTC(), func(*State, *[]auditNote) error { return nil }); err != nil {
 		return nil, err
 	}
 	return s, nil
@@ -238,8 +238,12 @@ func (s *Store) write(st State) error {
 	if err != nil {
 		return err
 	}
-	return os.Rename(f.Name(), s.path)
+	return rename(f.Name(), s.path)
 }
+
+// rename installs a written state file; tests replace it to simulate a
+// failed commit.
+var rename = os.Rename
 
 // Current returns the state, rereading the file only when it changed. Expired
 // restrictions are ignored by Correlate even before they are pruned.
@@ -268,9 +272,19 @@ func (s *Store) remember(st State) {
 	}
 }
 
-// Update applies fn under the lock, expires stale restrictions (audited) and
-// writes the result atomically. It returns the restrictions it expired.
-func (s *Store) Update(now time.Time, fn func(*State) error) ([]Restriction, error) {
+// auditNote is one audit record of an update, written once the state it
+// describes is committed.
+type auditNote struct {
+	action      string
+	restriction Restriction
+	who, reason string
+}
+
+// update applies fn under the lock, expires stale restrictions and writes the
+// result atomically. The expiries and the notes fn records reach the audit log
+// only after the state commits, so history never claims a transition that did
+// not happen. It returns the restrictions it expired.
+func (s *Store) update(now time.Time, fn func(*State, *[]auditNote) error) ([]Restriction, error) {
 	unlock, err := lockPath(s.lock)
 	if err != nil {
 		return nil, err
@@ -290,19 +304,23 @@ func (s *Store) Update(now time.Time, fn func(*State) error) ([]Restriction, err
 		}
 	}
 	st.Restrictions = kept
+	var notes []auditNote
 	for _, r := range expired {
-		if err := s.audit(now, "expired", r, "", "retention elapsed"); err != nil {
-			return nil, err
-		}
+		notes = append(notes, auditNote{"expired", r, "", "retention elapsed"})
 	}
-	if err := fn(&st); err != nil {
-		return expired, err
+	if err := fn(&st, &notes); err != nil {
+		return nil, err
 	}
 	st.Updated = now
 	if err := s.write(st); err != nil {
-		return expired, err
+		return nil, err
 	}
 	s.remember(st)
+	for _, n := range notes {
+		if err := s.audit(now, n.action, n.restriction, n.who, n.reason); err != nil {
+			return expired, err
+		}
+	}
 	return expired, nil
 }
 
@@ -312,18 +330,15 @@ func (s *Store) Update(now time.Time, fn func(*State) error) ([]Restriction, err
 // every unresolved one; the caller fails closed.
 func (s *Store) Add(now time.Time, r Restriction) error {
 	r.Target = storedTarget(r.Target)
-	_, err := s.Update(now, func(st *State) error {
+	r.Created = now
+	r.Attempts = 1
+	_, err := s.update(now, func(st *State, notes *[]auditNote) error {
 		for _, existing := range st.Restrictions {
 			if existing.Rule == r.Rule && existing.Type == r.Type && existing.Target == r.Target {
 				return nil
 			}
 		}
-		r.Created = now
-		r.Attempts = 1
 		if len(st.Restrictions) >= maxRestrictions {
-			if err := s.audit(now, "refused", r, "", "state full: "+r.Rule+" denied "+r.Type+" "+r.Target); err != nil {
-				return err
-			}
 			return ErrFull
 		}
 		r.ID = event.NewID("rst")
@@ -332,14 +347,20 @@ func (s *Store) Add(now time.Time, r Restriction) error {
 			r.Expires = now.Add(s.serious)
 		}
 		st.Restrictions = append(st.Restrictions, r)
-		return s.audit(now, "restricted", r, "", r.Rule+" denied "+r.Type+" "+r.Target)
+		*notes = append(*notes, auditNote{"restricted", r, "", r.Rule + " denied " + r.Type + " " + r.Target})
+		return nil
 	})
+	if errors.Is(err, ErrFull) {
+		// Nothing changed; the refusal itself is the event.
+		r.ID = ""
+		err = errors.Join(err, s.audit(now, "refused", r, "", "state full: "+r.Rule+" denied "+r.Type+" "+r.Target))
+	}
 	return err
 }
 
 // Attempt appends a correlated step to a restriction's trajectory.
 func (s *Store) Attempt(now time.Time, id string, l Link) error {
-	_, err := s.Update(now, func(st *State) error {
+	_, err := s.update(now, func(st *State, notes *[]auditNote) error {
 		for i := range st.Restrictions {
 			r := &st.Restrictions[i]
 			if r.ID != id {
@@ -351,7 +372,8 @@ func (s *Store) Attempt(now time.Time, id string, l Link) error {
 			if len(r.Related) > maxRelated {
 				r.Related = r.Related[len(r.Related)-maxRelated:]
 			}
-			return s.audit(now, "correlated", *r, "", l.Correlation+": "+l.Type+" "+l.Target+" in run "+l.RunID)
+			*notes = append(*notes, auditNote{"correlated", *r, "", l.Correlation + ": " + l.Type + " " + l.Target + " in run " + l.RunID})
+			return nil
 		}
 		return nil
 	})
@@ -362,14 +384,12 @@ func (s *Store) Attempt(now time.Time, id string, l Link) error {
 // id is empty. who and reason are recorded for every removed restriction.
 func (s *Store) Clear(now time.Time, id, who, reason string) ([]Restriction, error) {
 	var cleared []Restriction
-	_, err := s.Update(now, func(st *State) error {
+	_, err := s.update(now, func(st *State, notes *[]auditNote) error {
 		kept := st.Restrictions[:0]
 		for _, r := range st.Restrictions {
 			if id == "" || r.ID == id {
 				cleared = append(cleared, r)
-				if err := s.audit(now, "cleared", r, who, reason); err != nil {
-					return err
-				}
+				*notes = append(*notes, auditNote{"cleared", r, who, reason})
 				continue
 			}
 			kept = append(kept, r)
@@ -384,14 +404,12 @@ func (s *Store) Clear(now time.Time, id, who, reason string) ([]Restriction, err
 // grant for it. Effects and other targets stay restricted.
 func (s *Store) Resolve(now time.Time, typeID, target, who, reason string) ([]Restriction, error) {
 	var resolved []Restriction
-	_, err := s.Update(now, func(st *State) error {
+	_, err := s.update(now, func(st *State, notes *[]auditNote) error {
 		kept := st.Restrictions[:0]
 		for _, r := range st.Restrictions {
 			if r.Type == typeID && r.Target == storedTarget(target) {
 				resolved = append(resolved, r)
-				if err := s.audit(now, "resolved", r, who, reason); err != nil {
-					return err
-				}
+				*notes = append(*notes, auditNote{"resolved", r, who, reason})
 				continue
 			}
 			kept = append(kept, r)

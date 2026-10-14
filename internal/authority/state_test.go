@@ -131,7 +131,7 @@ func TestRestrictionsPersistCorrelateExpireAndClear(t *testing.T) {
 	if _, ok := st.Correlate(Attempt{Type: "network", Target: "deploy.example.com", RunID: "run_c"}, later); ok {
 		t.Fatal("expired restriction correlated")
 	}
-	expired, err := s.Update(later, func(*State) error { return nil })
+	expired, err := s.update(later, func(*State, *[]auditNote) error { return nil })
 	if err != nil || len(expired) != 1 || expired[0].ID != pause.ID {
 		t.Fatalf("expiry: %v %+v", err, expired)
 	}
@@ -313,4 +313,38 @@ func TestWorstCaseStateFitsTheReader(t *testing.T) {
 	}
 	info, _ := os.Stat(s.path)
 	t.Logf("worst-case state: %d bytes of %d", info.Size(), maxStateBytes)
+}
+
+// History never records a transition whose state write failed: a failed
+// clear leaves the restriction active and unaudited.
+func TestAuditFollowsCommittedState(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir, testContext(), time.Hour, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add(epoch, Restriction{Rule: "network-denied", Decision: "pause", Type: "network", Target: "deploy.example.com", RunID: "run_a", EventID: "evt_1"}); err != nil {
+		t.Fatal(err)
+	}
+	failed := errors.New("disk full")
+	rename = func(string, string) error { return failed }
+	t.Cleanup(func() { rename = os.Rename })
+	if _, err := s.Clear(epoch, "", "human:onno", "reviewed"); !errors.Is(err, failed) {
+		t.Fatalf("clear with a failed commit: %v", err)
+	}
+	if err := s.Add(epoch, Restriction{Rule: "tool-denied", Decision: "pause", Type: "tool", Target: "vercel/deploy", RunID: "run_a", EventID: "evt_2"}); !errors.Is(err, failed) {
+		t.Fatalf("add with a failed commit: %v", err)
+	}
+	rename = os.Rename
+	st, err := Peek(dir, testContext())
+	if err != nil || len(st.Restrictions) != 1 {
+		t.Fatalf("state changed without a commit: %v %+v", err, st.Restrictions)
+	}
+	var history strings.Builder
+	if err := History(dir, testContext(), &history); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(history.String(), `"action":"cleared"`) || strings.Contains(history.String(), "vercel/deploy") {
+		t.Fatalf("history claims an uncommitted transition: %s", history.String())
+	}
 }

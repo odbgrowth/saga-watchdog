@@ -258,8 +258,13 @@ func TestReplicationEvidenceTrustAndProvenance(t *testing.T) {
 		}
 		return d
 	}
-	if d := check(socket.Input{Type: "agent", Action: "instance.start", Target: "test-runner", RuntimeType: "worker"}); !d.Allowed || d.Decision.Authorization != "replication.same_host_workers" || d.Instance == nil || d.Instance.Provenance != "unknown" {
-		t.Fatalf("authorized worker: %+v %+v", d.Decision, d.Instance)
+	worker := check(socket.Input{Type: "agent", Action: "instance.start", Target: "test-runner", RuntimeType: "worker"})
+	if !worker.Allowed || worker.Decision.Authorization != "replication.same_host_workers" || worker.Instance == nil || worker.Instance.Provenance != "unknown" {
+		t.Fatalf("authorized worker: %+v %+v", worker.Decision, worker.Instance)
+	}
+	// The report of that start is the same worker: same slot, same instance.
+	if d := send("emit", socket.Input{Type: "agent", Action: "instance.start", Target: "test-runner", RuntimeType: "worker", Result: "success"}); !d.Allowed {
+		t.Fatalf("report of the authorized worker: %+v", d.Decision)
 	}
 	if d := check(socket.Input{Type: "agent", Action: "instance.start", Target: "codex"}); d.Allowed || d.Decision.RuleID != "unauthorized-agent-replication" || d.Decision.Action != "pause" || d.Instance != nil {
 		t.Fatalf("unauthorized agent: %+v", d.Decision)
@@ -298,6 +303,15 @@ func TestReplicationEvidenceTrustAndProvenance(t *testing.T) {
 	}
 	if e := find(events, "integration", "agent", "test-runner"); e == nil || e.Metadata["provenance"] != "unknown" || e.Metadata["authorized_by_rule"] != "replication.same_host_workers" || e.Metadata["instance_id"] != r.Instance.ID {
 		t.Fatalf("worker provenance audit: %+v", e)
+	}
+	var children []any
+	for _, e := range events {
+		if e.Type == "agent" && e.Target == "test-runner" {
+			children = append(children, e.Metadata["child_instance_id"])
+		}
+	}
+	if len(children) != 2 || children[0] != worker.Instance.ID || children[1] != worker.Instance.ID {
+		t.Fatalf("check and report of one start name different instances: %v (assigned %s)", children, worker.Instance.ID)
 	}
 	var violations int
 	for _, e := range events {
