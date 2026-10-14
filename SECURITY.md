@@ -23,7 +23,7 @@ security impact. Redact all real secrets and unrelated project data.
 
 ## Supported versions
 
-v0.4.0 is the current release. Fixes target `main` and ship in the next
+v0.5.0 is the current release. Fixes target `main` and ship in the next
 tagged release; there is no maintained release branch or backport commitment.
 Report issues against the latest release or `main`. Native Windows supervision
 is unsupported.

@@ -13,10 +13,11 @@ behaviour is safe. Policy is a handful of explicit rules over observable
 events, evaluated by deterministic Go code with no LLM, no cloud service and
 no database.
 
-**Status:** v0.4.0 is the current release, with Linux and macOS archives on
+**Status:** v0.5.0 is the current release, with Linux and macOS archives on
 the [Releases page](https://github.com/odbgrowth/saga-watchdog/releases). It
-adds allowlist modes with per-run grants, shell-after-denial escalation and a
-URL-shortener tripwire. Development continues on `main`.
+adds persistent authority restrictions across runs and sessions, detection of
+agent replication and cross-host authority expansion, and agent-instance
+provenance without inherited authority. Development continues on `main`.
 
 ## Why it exists
 
@@ -71,7 +72,7 @@ Use a Linux environment such as WSL on Windows; native Windows supervision and
 Docker named pipes are unsupported.
 
 ```sh
-go install github.com/odbgrowth/saga-watchdog/cmd/saga-watchdog@v0.4.0
+go install github.com/odbgrowth/saga-watchdog/cmd/saga-watchdog@v0.5.0
 export PATH="$(go env GOPATH)/bin:$PATH"
 saga-watchdog version
 ```
