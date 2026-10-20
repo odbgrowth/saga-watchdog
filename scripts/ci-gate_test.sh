@@ -79,9 +79,13 @@ GH
 printf '#!/usr/bin/env bash\necho not json\nexit 1\n' >"$tmp/broken/gh"
 chmod +x "$tmp/ok/gh" "$tmp/broken/gh"
 
+# The table goes to GITHUB_STEP_SUMMARY, which the runner sets for real, so the
+# test always points it at its own file and reads that back together with stdout.
 summary() {
+  : >"$tmp/summary.md"
   GH_TOKEN=unused GITHUB_REPOSITORY=owner/repo GITHUB_RUN_ID=1 PATH="$1:$PATH" \
-    scripts/ci-summary.sh 2>&1
+    GITHUB_STEP_SUMMARY="$tmp/summary.md" scripts/ci-summary.sh 2>&1
+  cat "$tmp/summary.md"
 }
 
 rc=0
@@ -92,7 +96,7 @@ else
   bad "summary: gh failure is reported with exit 0 (exit $rc)"
 fi
 rc=0
-output="$(env -u GITHUB_REPOSITORY -u GITHUB_RUN_ID scripts/ci-summary.sh 2>&1)" || rc=$?
+output="$(env -u GITHUB_REPOSITORY -u GITHUB_RUN_ID -u GITHUB_STEP_SUMMARY scripts/ci-summary.sh 2>&1)" || rc=$?
 if [[ "$rc" -eq 0 && "$output" == *"timing summary skipped"* ]]; then
   ok "summary: missing environment is reported with exit 0"
 else
