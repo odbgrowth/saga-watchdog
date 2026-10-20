@@ -51,6 +51,60 @@ Run the [shell demo](examples/DEMO.md) and the
 Measure the pre-action path with
 `SAGA_LATENCY=1 go test -run TestHookLatencyReport -v ./internal/integrations/claudecode`.
 
+### CI jobs
+
+The `CI` workflow runs these jobs in parallel:
+
+- `Go (ubuntu-latest)` and `Go (macos-latest)`: formatting, the release
+  reference check, `go vet`, `go test` and `go build`. The Linux job also runs
+  `scripts/ci-gate_test.sh`, the self-test of the gate below.
+- `Race (ubuntu-latest)` and `Race (macos-latest)`: `go test -race ./...`.
+- `Docker acceptance (ubuntu-latest)`: the live Docker observer test against
+  disposable containers.
+- `ci-gate`: the one check that collects all the others. It needs the test,
+  race and Docker acceptance jobs, runs even when one of them failed, and
+  fails unless every one of them succeeded. A failed, cancelled, skipped or
+  missing job turns it red. This matters because a skipped required check
+  counts as passing for the merge, and a matrix with one red leg must never
+  pass as green. `scripts/ci-gate.sh` decides; `scripts/ci-gate_test.sh`
+  tests it against every result and checks that `ci.yml` keeps the gate wired
+  up (the required jobs equal the `needs` of `ci-gate`, and it runs with
+  `if: always()`). When you add a job to `ci.yml`, add it to both `needs` and
+  `REQUIRED_JOBS` of `ci-gate`; the self-test fails otherwise.
+
+Branch protection matches checks by name, so renaming `ci-gate` or the
+`Go (...)` jobs means updating the ruleset on `main` as well.
+
+`ci-gate` also writes a timing table to the run summary: queue time, duration
+and result per job, the wall-clock time, the critical path (the longest job)
+and the runner seconds (the sum of all job durations). The table is
+informational; a problem while writing it never changes the result.
+
+Concurrency: a new push to a pull request cancels the earlier run for that
+pull request, and pull requests do not affect each other. A push run on
+`main` or on a `codex/**` branch has a group of its own, keyed on the commit,
+so it is neither cancelled nor replaced by a newer push: every commit keeps
+its own `ci-gate` result.
+
+The release workflow is separate and deliberately serial: it runs every check
+on the exact commit it publishes.
+
+Measured before the split (median of 20 successful `CI` runs): 102 s
+wall-clock. The macOS job took 94 s, of which the Go toolchain download in
+`setup-go` took 28 s, `go vet` 2 s, `go test` 23 s, `go test -race` 28 s,
+build 2 s and 7 s waiting for a runner. The Ubuntu job took 59 s.
+
+Measured after the split, on the pull request that introduced it (two green
+runs): 83 s and 88 s wall-clock, with `Race (macos-latest)` as the longest
+job at 68 s and 72 s and `Go (ubuntu-latest)` at 38 s and 40 s. Runner time
+rose from about 153 s to 220 to 242 s per run.
+
+Known limitation: the macOS runner has no Go toolchain cache, so `setup-go`
+downloads the toolchain (about 28 s) in every macOS job. Splitting the work
+into jobs pays that cost once per job, so it is the lower bound for the
+macOS jobs. The extra jobs also add runner time in total, even though the
+wall-clock time drops.
+
 ## Dependencies
 
 Before adding a dependency, ask whether the standard library or an existing
@@ -114,8 +168,10 @@ There is no public Go API or plugin framework.
 Releases are tagged from `main`; development fixes land on `main` first.
 Before tagging a release, maintainers should:
 
-1. Verify Linux/macOS CI and the live Docker acceptance test on the intended
-   commit. Try the installation and both demos from a clean environment.
+1. Verify that the `ci-gate` check is green on the intended commit: it
+   covers the Linux and macOS tests, the race tests and the live Docker
+   acceptance test. Try the installation and both demos from a clean
+   environment.
 2. Verify private vulnerability reporting and review the documented
    limitations.
 3. Update the README's release status and installation instructions, and the
