@@ -8,9 +8,10 @@ on:
 permissions:
   contents: read
 
+# Only a superseded pull request run is cancelled; a run in progress on main or a push branch is never cancelled.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
@@ -41,10 +42,41 @@ jobs:
       - run: scripts/check-release-refs.sh
       - run: go vet ./...
       - run: go test ./...
-      - run: go test -race ./...
       - run: go build ./cmd/saga-watchdog
+
+  race:
+    name: Race (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    env:
+      GOFLAGS: -mod=readonly
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: go test -race ./...
+
+  docker-acceptance:
+    name: Docker acceptance (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GOFLAGS: -mod=readonly
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
       - name: Docker observer acceptance (disposable containers)
-        if: runner.os == 'Linux'
         env:
           SAGA_DOCKER_TEST_SOCKET: /var/run/docker.sock
           SAGA_DOCKER_TEST_IMAGE: alpine:3.22
