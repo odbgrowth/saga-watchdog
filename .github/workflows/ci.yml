@@ -40,6 +40,10 @@ jobs:
             exit 1
           fi
       - run: scripts/check-release-refs.sh
+      # The gate script only ever runs on ubuntu, so testing it there is enough.
+      - name: Self-test the CI gate
+        if: runner.os == 'Linux'
+        run: scripts/ci-gate_test.sh
       - run: go vet ./...
       - run: go test ./...
       - run: go build ./cmd/saga-watchdog
@@ -83,3 +87,33 @@ jobs:
         run: |
           docker pull alpine:3.22
           go test -count=1 -run TestDockerIntegration -v ./internal/dockerwatch
+
+  # The single check that collects the others. It must run with `if: always()`:
+  # when a needed job fails, a plain job is skipped, and a skipped required
+  # check counts as green for the merge. The script turns a failed, cancelled,
+  # skipped or missing job into a red ci-gate, so a matrix with one red leg
+  # never passes as green.
+  ci-gate:
+    name: ci-gate
+    needs: [test, race, docker-acceptance]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Require every job to succeed
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+          REQUIRED_JOBS: "test race docker-acceptance"
+        run: scripts/ci-gate.sh
+      # Informational: the script reports its own problems and always exits 0.
+      - name: Write the timing summary
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/ci-summary.sh
