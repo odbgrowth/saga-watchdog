@@ -81,9 +81,10 @@ and the runner seconds (the sum of all job durations). The table is
 informational; a problem while writing it never changes the result.
 
 Concurrency: a new push to a pull request cancels the earlier run for that
-pull request, and pull requests do not affect each other. A run that is in
-progress on `main` or on a pushed `codex/**` branch is never cancelled by a
-newer push.
+pull request, and pull requests do not affect each other. A push run on
+`main` or on a `codex/**` branch has a group of its own, keyed on the commit,
+so it is neither cancelled nor replaced by a newer push: every commit keeps
+its own `ci-gate` result.
 
 The release workflow is separate and deliberately serial: it runs every check
 on the exact commit it publishes.

@@ -8,9 +8,11 @@ on:
 permissions:
   contents: read
 
-# Only a superseded pull request run is cancelled; a run in progress on main or a push branch is never cancelled.
+# Only a superseded pull request run is cancelled. A push run gets a group of its own (the commit SHA):
+# without cancel-in-progress GitHub still replaces a queued run by a newer one in the same group, so a
+# group per branch could leave a commit between two quick merges without a ci-gate result.
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
+  group: ci-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
