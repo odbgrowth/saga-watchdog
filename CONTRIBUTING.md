@@ -92,9 +92,12 @@ on the exact commit it publishes.
 Measured before the split (median of 20 successful `CI` runs): 102 s
 wall-clock. The macOS job took 94 s, of which the Go toolchain download in
 `setup-go` took 28 s, `go vet` 2 s, `go test` 23 s, `go test -race` 28 s,
-build 2 s and 7 s waiting for a runner. The Ubuntu job took 59 s. Expected
-after the split: about 65 to 70 s wall-clock. This is an expectation, not yet
-a measurement.
+build 2 s and 7 s waiting for a runner. The Ubuntu job took 59 s.
+
+Measured after the split, on the pull request that introduced it (two green
+runs): 83 s and 88 s wall-clock, with `Race (macos-latest)` as the longest
+job at 68 s and 72 s and `Go (ubuntu-latest)` at 38 s and 40 s. Runner time
+rose from about 153 s to 220 to 242 s per run.
 
 Known limitation: the macOS runner has no Go toolchain cache, so `setup-go`
 downloads the toolchain (about 28 s) in every macOS job. Splitting the work
