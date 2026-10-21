@@ -238,9 +238,20 @@ func doctor(g gitinfo.Info, c config.Config) int {
 	if doctorAuthority(g, c) != 0 {
 		code = 2
 	}
-	fmt.Println("! File READ monitoring and raw network enforcement are unavailable")
+	if c.Run.RequirePreventiveHook {
+		fmt.Println("OK run.require_preventive_hook: run refuses to start unless the launched agent's own hook is configured and ready (saga-watchdog claude|codex|gemini doctor)")
+	}
+	ctxID, disabled, _, err := cliContext(g, c, "")
+	contextID := ""
+	if err == nil && disabled == "" {
+		contextID = ctxID.ID()
+	}
+	fmt.Println("Coverage")
+	for _, line := range coverage(c, integrations.Controls(g.Root), contextID, disabled) {
+		fmt.Println("  " + line)
+	}
 	fmt.Println("! Integrations report events; they do not prove OS actions occurred")
-	fmt.Println("! Same-user separation is not a sandbox; detached processes can escape the group")
+	fmt.Println("! Same-user separation is not a sandbox")
 	fmt.Println("Core protection level: LOCAL")
 	return code
 }

@@ -286,7 +286,16 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 			fmt.Fprintln(os.Stderr, "WARNING: run.unattended without a preventive hook: a pause cannot restrain this agent; only kill decisions and the run budget stop it")
 		}
 	}
-	fmt.Fprintf(os.Stderr, "SAGA Watchdog %s\nProject  %s\nRun      %s\nMode     %s\nBranch   %s\nPolicy   %s\nHooks    %s\nContext  %s\nInstance %s\nStarting %s\n", version, event.Redact(name), r.ID, c.Mode, event.Redact(g.Branch), hash[:12], hooks, event.Redact(contextLine), instanceLine, event.Redact(r.Agent))
+	fmt.Fprintf(os.Stderr, "SAGA Watchdog %s\nProject  %s\nRun      %s\nMode     %s\nBranch   %s\nPolicy   %s\nHooks    %s\nContext  %s\nInstance %s\n", version, event.Redact(name), r.ID, c.Mode, event.Redact(g.Branch), hash[:12], hooks, event.Redact(contextLine), instanceLine)
+	contextID := ""
+	if disabled == "" {
+		contextID = secCtx.ID()
+	}
+	fmt.Fprintln(os.Stderr, "Coverage")
+	for _, line := range coverage(c, r.Controls, contextID, disabled) {
+		fmt.Fprintln(os.Stderr, "  "+line)
+	}
+	fmt.Fprintf(os.Stderr, "Starting %s\n", event.Redact(r.Agent))
 	timeout := time.NewTimer(c.Run.MaxDuration)
 	defer timeout.Stop()
 	tick := time.NewTicker(time.Second)
