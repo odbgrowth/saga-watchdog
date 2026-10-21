@@ -103,7 +103,9 @@ saga-watchdog run -- claude
 The default policy refuses `main` and `master`, treats changes to
 `.saga-watchdog.yaml` as tampering, pauses for Git security, CI workflow,
 MCP and VS Code task configuration and secret-like file changes, detects
-deletion bursts, escalates repeated denials and stops a run after two hours. The policy stays fixed for the run. The
+deletion bursts, escalates repeated denials and stops a run after two hours.
+The policy stays fixed for the run. Without a hook this is supervision and
+post-action observation only; the next section adds pre-action checks. The
 [coding-agent guide](docs/coding-agent.md) covers configuration, controls and
 the generic `check`/`emit` integration; the [shell demo](examples/DEMO.md)
 shows it working without any AI account.
@@ -126,11 +128,13 @@ From then on, file edits, shell commands, web fetches and MCP tool calls are
 checked by the same policy engine before they execute (Claude Code shown):
 
 ```text
-Write src/app.go           -> allowed
-Edit .env                  -> blocked before execution, run paused
-Edit .claude/settings.json -> blocked, run stopped (hook tampering)
+Write src/app.go            -> allowed
+Edit .env                   -> blocked before execution, run paused
+Edit .mcp.json              -> blocked before execution, run paused for review
+Edit .claude/settings.json  -> blocked, run stopped (hook tampering)
 Claude saves "always allow" -> settings change held back, run paused for review
-SAGA not running           -> every matched call blocked (fail closed)
+mcp__github__get_issue      -> allowed; mcp__github__delete_repository denied when listed in tools.deny
+SAGA not running            -> every matched call blocked by the adapter (fail closed)
 ```
 
 Each decision is recorded with a stable rule ID, the tool name and, where
@@ -149,10 +153,13 @@ A started supervisor does not prove that the hook is in place: a project can
 carry the Claude Code hook while you start Codex. With
 `run.require_preventive_hook: true` in the policy, `run` refuses to start
 unless the launched agent is a supported one and its own hook passes the
-checks of `saga-watchdog <agent> doctor`. A generic command is refused with
-the explanation that its coverage cannot be verified. `doctor` and the run
-banner print the same `Coverage` lines: what is checked before execution,
-what is observed afterwards, and what SAGA cannot see at all.
+checks of `saga-watchdog <agent> doctor`, probed on the executable that
+will actually run. A generic command is refused with the explanation that
+its coverage cannot be verified. `doctor` and the run banner print the same
+`Coverage` lines for the launched agent: what is checked before execution,
+how the hook fails, what is observed afterwards, and what SAGA cannot see at
+all. A hook installed for another agent is reported as installed but not
+loaded, never as coverage.
 
 ## Default mode and the hardened example
 
@@ -276,14 +283,15 @@ authority even though the observer only sends read requests.
 ## Commands
 
 ```text
-Project        init | validate | doctor
-Run            run -- <command> | status | events | report [--json] | pause | resume | kill | grant
+Project        init | validate | doctor | version
+Run            run -- <command> | status | events | report [--json] | pause | resume | kill
+Grants         grant [--run ID] network <host> | tool <server/tool>
 Authority      authority status | history | clear (--id ID | --all) --reason TEXT
 Integrations   check | emit
 Claude Code    claude config | setup [--local] | remove [--local] | doctor | hook
 Codex CLI      codex  config | setup | remove | doctor | hook
 Gemini CLI     gemini config | setup | remove | doctor | hook
-Docker         docker validate | watch | status | events
+Docker         docker validate | watch [--once] | status | events
 ```
 
 Run `saga-watchdog --help` for arguments.
