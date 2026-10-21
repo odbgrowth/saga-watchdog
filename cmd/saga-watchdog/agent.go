@@ -119,77 +119,17 @@ func agentCLI(spec *agenthook.Spec, args []string) int {
 
 func agentDoctor(spec *agenthook.Spec, g gitinfo.Info, c config.Config) int {
 	code := doctor(g, c)
-	check := func(ok bool, pass, failure string) {
-		if ok {
-			fmt.Println("OK", pass)
-			return
-		}
-		fmt.Println("FAIL", failure)
-		code = 2
-	}
-	_, err := exec.LookPath("saga-watchdog")
-	check(err == nil, "saga-watchdog is on PATH for the hook command", "saga-watchdog is not on PATH; the hook command cannot start")
-	agentPath, err := exec.LookPath(spec.Agent)
-	check(err == nil, spec.Agent+" executable found", spec.Agent+" executable not found on PATH")
-	if err == nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		switch spec.Agent {
-		case "claude":
-			out, err := exec.CommandContext(ctx, agentPath, "--version").Output()
-			version := claudecode.Version(string(out))
-			switch {
-			case err != nil || version == "":
-				fmt.Println("! claude --version failed; compatibility not verified")
-			case claudecode.AtLeast(version, claudecode.MinimumVersion):
-				fmt.Printf("OK Claude Code %s supports onFailure: block (fail-closed hooks)\n", version)
-			default:
-				fmt.Printf("! Claude Code %s predates %s; Claude cannot fail closed on hook errors, only the adapter does\n", version, claudecode.MinimumVersion)
-			}
-		case "codex":
-			// The hooks feature flag is reported by the CLI itself; a build that
-			// disables it never runs the hook.
-			out, err := exec.CommandContext(ctx, agentPath, "features", "list").Output()
-			if err != nil {
-				fmt.Println("! codex features list failed; hooks feature not verified")
-			} else {
-				check(featureEnabled(string(out), "hooks"), "codex reports the hooks feature enabled", "codex reports the hooks feature disabled; enable it with: codex features enable hooks")
-			}
-		case "gemini":
-			out, err := exec.CommandContext(ctx, agentPath, "--version").Output()
-			if version := claudecode.Version(string(out)); err != nil || version == "" {
-				fmt.Println("! gemini --version failed; compatibility not verified")
-			} else {
-				fmt.Printf("OK Gemini CLI %s found (hook contract verified with 0.63.0)\n", version)
-			}
+	ready := hookReadiness(spec, g.Root)
+	for _, ch := range ready.checks {
+		if ch.ok {
+			fmt.Println("OK", ch.text)
+		} else {
+			fmt.Println("FAIL", ch.text)
+			code = 2
 		}
 	}
-	configured := false
-	for _, s := range spec.Inspect(g.Root) {
-		path := filepath.Join(g.Root, filepath.FromSlash(s.File))
-		switch {
-		case s.Err != nil:
-			check(false, "", s.File+": "+event.Redact(s.Err.Error()))
-		case s.Disabled:
-			check(false, "", s.File+" disables hooks; the SAGA hook does not run")
-		case !s.Configured:
-			continue
-		}
-		if !s.Configured {
-			continue
-		}
-		configured = true
-		want := "runs the SAGA " + spec.PreEvent + " hook with the expected matcher"
-		if spec.Agent == "claude" {
-			want = "runs the SAGA PreToolUse hook with onFailure: block"
-		}
-		check(s.Preventive, s.File+" "+want, s.File+" references SAGA but "+spec.PreEvent+" is missing, uses another matcher or cannot block; compare with: saga-watchdog "+spec.Agent+" config")
-		if info, err := os.Lstat(path); err == nil && runtime.GOOS != "windows" {
-			check(info.Mode().Perm()&0022 == 0, s.File+" is not group/other writable", s.File+" is writable by group or others; use chmod go-w "+s.File)
-		}
-	}
-	if !configured {
-		check(false, "", "no SAGA hook in "+strings.Join(spec.Files, " or ")+"; run: saga-watchdog "+spec.Agent+" setup")
+	for _, note := range ready.notes {
+		fmt.Println("!", note)
 	}
 	if c.Mode == "observe" {
 		fmt.Println("! mode: observe; pre-action checks record decisions but allow every tool call")
@@ -207,6 +147,108 @@ func agentDoctor(spec *agenthook.Spec, g gitinfo.Info, c config.Config) int {
 		fmt.Println("! Shell commands, MCP arguments and prompt-only web_fetch calls are not interpreted")
 	}
 	return code
+}
+
+// readiness is what SAGA can check locally about one agent's preventive hook
+// before a run: the executables, the agent's version or feature flags and
+// the project hook configuration. Each check passes or fails with the text
+// the doctor prints; notes are facts that neither pass nor fail. It is a
+// lexical check of files and CLI output, not proof that the agent loads or
+// honours the hook.
+type readiness struct {
+	checks []readinessCheck
+	notes  []string
+}
+
+type readinessCheck struct {
+	ok   bool
+	text string
+}
+
+func (r *readiness) check(ok bool, pass, failure string) {
+	text := failure
+	if ok {
+		text = pass
+	}
+	r.checks = append(r.checks, readinessCheck{ok: ok, text: text})
+}
+
+// problems lists the failed checks.
+func (r readiness) problems() []string {
+	var out []string
+	for _, ch := range r.checks {
+		if !ch.ok {
+			out = append(out, ch.text)
+		}
+	}
+	return out
+}
+
+// hookReadiness runs the agent-specific pre-flight checks that the agent
+// doctor prints and run.require_preventive_hook refuses on.
+func hookReadiness(spec *agenthook.Spec, root string) readiness {
+	var r readiness
+	_, err := exec.LookPath("saga-watchdog")
+	r.check(err == nil, "saga-watchdog is on PATH for the hook command", "saga-watchdog is not on PATH; the hook command cannot start")
+	agentPath, err := exec.LookPath(spec.Agent)
+	r.check(err == nil, spec.Agent+" executable found", spec.Agent+" executable not found on PATH")
+	if err == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		switch spec.Agent {
+		case "claude":
+			out, err := exec.CommandContext(ctx, agentPath, "--version").Output()
+			version := claudecode.Version(string(out))
+			switch {
+			case err != nil || version == "":
+				r.notes = append(r.notes, "claude --version failed; compatibility not verified")
+			default:
+				r.check(claudecode.AtLeast(version, claudecode.MinimumVersion), fmt.Sprintf("Claude Code %s supports onFailure: block (fail-closed hooks)", version), fmt.Sprintf("Claude Code %s predates %s; Claude cannot fail closed on hook errors, only the adapter does; upgrade Claude Code", version, claudecode.MinimumVersion))
+			}
+		case "codex":
+			// The hooks feature flag is reported by the CLI itself; a build that
+			// disables it never runs the hook.
+			out, err := exec.CommandContext(ctx, agentPath, "features", "list").Output()
+			if err != nil {
+				r.notes = append(r.notes, "codex features list failed; hooks feature not verified")
+			} else {
+				r.check(featureEnabled(string(out), "hooks"), "codex reports the hooks feature enabled", "codex reports the hooks feature disabled; enable it with: codex features enable hooks")
+			}
+		case "gemini":
+			out, err := exec.CommandContext(ctx, agentPath, "--version").Output()
+			if version := claudecode.Version(string(out)); err != nil || version == "" {
+				r.notes = append(r.notes, "gemini --version failed; compatibility not verified")
+			} else {
+				r.notes = append(r.notes, fmt.Sprintf("Gemini CLI %s found (hook contract verified with 0.63.0)", version))
+			}
+		}
+	}
+	configured := false
+	for _, s := range spec.Inspect(root) {
+		path := filepath.Join(root, filepath.FromSlash(s.File))
+		switch {
+		case s.Err != nil:
+			r.check(false, "", s.File+": "+event.Redact(s.Err.Error()))
+		case s.Disabled:
+			r.check(false, "", s.File+" disables hooks; the SAGA hook does not run")
+		}
+		if !s.Configured {
+			continue
+		}
+		configured = true
+		want := "runs the SAGA " + spec.PreEvent + " hook with the expected matcher"
+		if spec.Agent == "claude" {
+			want = "runs the SAGA PreToolUse hook with onFailure: block"
+		}
+		r.check(s.Preventive, s.File+" "+want, s.File+" references SAGA but "+spec.PreEvent+" is missing, uses another matcher or cannot block; compare with: saga-watchdog "+spec.Agent+" config")
+		if info, err := os.Lstat(path); err == nil && runtime.GOOS != "windows" {
+			r.check(info.Mode().Perm()&0022 == 0, s.File+" is not group/other writable", s.File+" is writable by group or others; use chmod go-w "+s.File)
+		}
+	}
+	if !configured {
+		r.check(false, "", "no SAGA hook in "+strings.Join(spec.Files, " or ")+"; run: saga-watchdog "+spec.Agent+" setup")
+	}
+	return r
 }
 
 // featureEnabled reads one row of `codex features list`: name, stage, state.

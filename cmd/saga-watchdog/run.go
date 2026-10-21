@@ -32,6 +32,16 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 	if gitinfo.Protected(g.Branch, c.Git.ProtectedBranches) && !c.Git.AllowProtected {
 		return fail(fmt.Errorf("protected branch: create a working branch or explicitly set git.allow_protected in policy"))
 	}
+	// A hardened policy wants proof that the agent's own hook is in place
+	// before anything starts; a run record is not written for a refusal.
+	var required *agenthook.Spec
+	if c.Run.RequirePreventiveHook {
+		spec, err := requirePreventiveHook(g.Root, command[0])
+		if err != nil {
+			return fail(err)
+		}
+		required = spec
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	name := c.Project.Name
@@ -136,6 +146,9 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 	// for this run. They are fingerprinted now, after the observer is live, and
 	// protected like the policy file until the run ends.
 	r.Controls = integrations.Controls(g.Root)
+	if required != nil && !slices.ContainsFunc(required.Files, func(file string) bool { return slices.Contains(r.Controls, file) }) {
+		return finish("failed", "run.require_preventive_hook: the "+required.Name+" hook configuration changed during startup", 125)
+	}
 	controlsDigest := map[string]string{}
 	if len(r.Controls) > 0 {
 		// Once a hook is active every agent configuration file matters: a
@@ -848,4 +861,24 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 			}
 		}
 	}
+}
+
+// requirePreventiveHook identifies the supported agent a command starts and
+// verifies that agent's own hook, not merely any installed hook. It reuses
+// the agent doctor's checks and refuses with every failed one. A command
+// without a supported integration cannot be verified and is refused rather
+// than declared protected.
+func requirePreventiveHook(root, command string) (*agenthook.Spec, error) {
+	spec := integrations.ForAgent(command)
+	if spec == nil {
+		var agents []string
+		for _, s := range integrations.Specs {
+			agents = append(agents, s.Agent)
+		}
+		return nil, fmt.Errorf("run.require_preventive_hook: preventive integration cannot be verified for %q; supported agents are %s. A generic command is supervised and observed after the fact only: start a supported agent, or set run.require_preventive_hook: false to run without pre-action coverage", filepath.Base(command), strings.Join(agents, ", "))
+	}
+	if problems := hookReadiness(spec, root).problems(); len(problems) > 0 {
+		return spec, fmt.Errorf("run.require_preventive_hook: the %s preventive hook is not ready for %q:\n  - %s\nFix the items above (saga-watchdog %s doctor), or set run.require_preventive_hook: false", spec.Name, filepath.Base(command), strings.Join(problems, "\n  - "), spec.Agent)
+	}
+	return spec, nil
 }
