@@ -3,6 +3,8 @@
 package integrations
 
 import (
+	"path/filepath"
+
 	"github.com/odbgrowth/saga-watchdog/internal/integrations/agenthook"
 	"github.com/odbgrowth/saga-watchdog/internal/integrations/claudecode"
 	"github.com/odbgrowth/saga-watchdog/internal/integrations/codex"
@@ -28,4 +30,16 @@ func Controls(root string) []string {
 		files = append(files, s.Controls(root)...)
 	}
 	return files
+}
+
+// ForAgent returns the integration of the agent a command starts, by the
+// executable's base name, or nil for a command without a supported hook.
+func ForAgent(command string) *agenthook.Spec {
+	name := filepath.Base(command)
+	for _, s := range Specs {
+		if s.Agent == name {
+			return s
+		}
+	}
+	return nil
 }

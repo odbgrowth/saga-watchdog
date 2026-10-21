@@ -15,7 +15,9 @@ var Files = []string{".claude/settings.json", ".claude/settings.local.json"}
 // Spec is the Claude Code hook configuration.
 var Spec = agenthook.Spec{
 	Name: "Claude Code", Agent: "claude", Producer: Producer, Command: Command, Matcher: Matcher, PreEvent: "PreToolUse", Files: Files,
-	Hooks: hooks,
+	// onFailure: "block" from MinimumVersion on; the doctor checks the version.
+	AgentFailsClosed: true,
+	Hooks:            hooks,
 	// A background (async) hook cannot block, so it is not preventive.
 	Preventive: func(_, hook map[string]any) bool { return hook["onFailure"] == "block" && hook["async"] != true },
 	Disabled:   func(obj map[string]any) bool { return obj["disableAllHooks"] == true },
