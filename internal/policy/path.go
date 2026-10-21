@@ -184,8 +184,14 @@ func matchSegments(pattern, target []string) bool {
 // config.toml, Gemini CLI settings.
 var agentSettings = []string{".claude/settings.json", ".claude/settings.local.json", ".codex/hooks.json", ".codex/config.toml", ".gemini/settings.json"}
 
+// projectConfig are repository files that make a tool or an editor execute
+// something: MCP server definitions and VS Code tasks. A change pauses the
+// run for review in every project, like a CI workflow change. Ordinary editor
+// preferences are not listed; add them with filesystem.protect when needed.
+var projectConfig = []string{".mcp.json", ".vscode/mcp.json", ".vscode/tasks.json"}
+
 // Controls cannot be hidden by a broad ignore such as .git/** or **.
-var controlPatterns = append([]string{".saga-watchdog.yaml", ".git/config", ".git/hooks/**", ".github/workflows/**"}, agentSettings...)
+var controlPatterns = append(append([]string{".saga-watchdog.yaml", ".git/config", ".git/hooks/**", ".github/workflows/**"}, agentSettings...), projectConfig...)
 
 func Ignored(target string, patterns []string) bool {
 	target = strings.TrimSuffix(strings.ReplaceAll(target, "\\", "/"), "/")
