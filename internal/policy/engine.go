@@ -366,9 +366,7 @@ func (e *Engine) file(ev event.Event, now time.Time) Decision {
 	}
 	for _, name := range []string{lexical, target} {
 		for _, control := range e.controls {
-			// Removing or renaming an ancestor (mv .claude .claude.bak) takes the
-			// control with it and yields no event for the file itself.
-			if name == control || (removed && strings.HasPrefix(control, name+"/")) {
+			if affects(name, control, removed) {
 				return decide("kill", "hook-tamper", control+" configures an active preventive integration and changed during the run")
 			}
 		}
@@ -377,7 +375,7 @@ func (e *Engine) file(ev event.Event, now time.Time) Decision {
 			// there (including Claude's own "always allow" save) is reviewed by a
 			// human rather than treated as proof of tampering.
 			for _, settings := range agentSettings {
-				if name == settings || (removed && strings.HasPrefix(settings, name+"/")) {
+				if affects(name, settings, removed) {
 					return decide("pause", "agent-config-modification", settings+" changed while a preventive integration is active")
 				}
 			}
@@ -391,8 +389,8 @@ func (e *Engine) file(ev event.Event, now time.Time) Decision {
 		for _, file := range projectConfig {
 			// These files make a tool or an editor run something: MCP servers
 			// and VS Code tasks. Reviewed by a human, whether or not a hook is
-			// active; removing their directory takes them with it.
-			if name == file || (removed && strings.HasPrefix(file, name+"/")) {
+			// active.
+			if affects(name, file, removed) {
 				return decide("pause", "project-config-modification", file+" configures tool or editor execution and changed during the run")
 			}
 		}
@@ -423,6 +421,13 @@ func (e *Engine) file(ev event.Event, now time.Time) Decision {
 		}
 	}
 	return decide("allow", "", "")
+}
+
+// affects reports whether an event on name changes file: the file itself, or,
+// when the event removes or renames name, an ancestor directory (mv .claude
+// .claude.bak takes the file with it and yields no event for the file).
+func affects(name, file string, removed bool) bool {
+	return name == file || (removed && strings.HasPrefix(file, name+"/"))
 }
 
 func (e *Engine) escalate(ev event.Event, now time.Time, denied bool) Decision {

@@ -877,17 +877,17 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 // the agent doctor's checks and refuses with every failed one. A command
 // without a supported integration cannot be verified and is refused rather
 // than declared protected.
-func requirePreventiveHook(root, command string) (*agenthook.Spec, error) {
-	spec := integrations.ForAgent(command)
+func requirePreventiveHook(root, executable string) (*agenthook.Spec, error) {
+	spec := integrations.ForAgent(executable)
 	if spec == nil {
 		var agents []string
 		for _, s := range integrations.Specs {
 			agents = append(agents, s.Agent)
 		}
-		return nil, fmt.Errorf("run.require_preventive_hook: preventive integration cannot be verified for %q; supported agents are %s. A generic command is supervised and observed after the fact only: start a supported agent, or set run.require_preventive_hook: false to run without pre-action coverage", filepath.Base(command), strings.Join(agents, ", "))
+		return nil, fmt.Errorf("run.require_preventive_hook: preventive integration cannot be verified for %q; supported agents are %s. A generic command is supervised and observed after the fact only: start a supported agent, or set run.require_preventive_hook: false to run without pre-action coverage", filepath.Base(executable), strings.Join(agents, ", "))
 	}
 	if problems := hookReadiness(spec, root).problems(); len(problems) > 0 {
-		return spec, fmt.Errorf("run.require_preventive_hook: the %s preventive hook is not ready for %q:\n  - %s\nFix the items above (saga-watchdog %s doctor), or set run.require_preventive_hook: false", spec.Name, filepath.Base(command), strings.Join(problems, "\n  - "), spec.Agent)
+		return nil, fmt.Errorf("run.require_preventive_hook: the %s preventive hook is not ready for %q:\n  - %s\nFix the items above (saga-watchdog %s doctor), or set run.require_preventive_hook: false", spec.Name, filepath.Base(executable), strings.Join(problems, "\n  - "), spec.Agent)
 	}
 	return spec, nil
 }

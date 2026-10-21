@@ -85,7 +85,7 @@ func TestRequirePreventiveHookAdmitsOnlyTheMatchingReadyHook(t *testing.T) {
 		t.Fatal(err)
 	}
 	code, out := runCLI(t, root, env, "run", "--", "claude", "-c", "true")
-	for _, want := range []string{"Coverage", "Pre-action checks: Claude Code hook in [.claude/settings.json]", "Hook failure: fail-closed on both sides", "Network: cooperative checks of reported hosts (allowlist mode)", "Authority correlation: this run only", "Starting claude"} {
+	for _, want := range []string{"Coverage", "Pre-action checks: Claude Code hook in .claude/settings.json", "Hook failure: fail-closed on both sides", "Network: cooperative checks of reported hosts (allowlist mode)", "Authority correlation: this run only", "Starting claude"} {
 		if code != 0 || !strings.Contains(out, want) {
 			t.Fatalf("claude with its hook: exit %d, want %q: %s", code, want, out)
 		}
@@ -117,7 +117,7 @@ func TestRequirePreventiveHookAdmitsOnlyTheMatchingReadyHook(t *testing.T) {
 		t.Fatal(err)
 	}
 	code, out = runCLI(t, root, env, "run", "--", "codex", "-c", "true")
-	if code != 0 || !strings.Contains(out, "Pre-action checks: Codex CLI hook in [.codex/hooks.json]") || !strings.Contains(out, "Codex CLI lets the call proceed when the hook cannot start or times out; not fail-closed on the agent side") || strings.Contains(out, "fail-closed on both sides") {
+	if code != 0 || !strings.Contains(out, "Pre-action checks: Codex CLI hook in .codex/hooks.json") || !strings.Contains(out, "Codex CLI lets the call proceed when the hook cannot start or times out; not fail-closed on the agent side") || strings.Contains(out, "fail-closed on both sides") {
 		t.Fatalf("codex banner: exit %d: %s", code, out)
 	}
 	code, out = runCLI(t, root, env, "codex", "doctor")

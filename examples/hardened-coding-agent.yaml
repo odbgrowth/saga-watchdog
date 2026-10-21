@@ -48,7 +48,6 @@ filesystem:
     # Extra project files that influence tool execution in this project.
     - .vscode/launch.json
     - .devcontainer/**
-    - Makefile
   delete_threshold: 50
   delete_window: 10s
 

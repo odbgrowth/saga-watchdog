@@ -15,9 +15,9 @@ var Files = []string{".claude/settings.json", ".claude/settings.local.json"}
 // Spec is the Claude Code hook configuration.
 var Spec = agenthook.Spec{
 	Name: "Claude Code", Agent: "claude", Producer: Producer, Command: Command, Matcher: Matcher, PreEvent: "PreToolUse", Files: Files,
-	// onFailure: "block" from MinimumVersion on; the doctor checks the version.
-	AgentFailsClosed: true,
-	Hooks:            hooks,
+	// The doctor checks the installed version against MinimumVersion.
+	FailClosed: "onFailure: block, " + MinimumVersion + " or newer",
+	Hooks:      hooks,
 	// A background (async) hook cannot block, so it is not preventive.
 	Preventive: func(_, hook map[string]any) bool { return hook["onFailure"] == "block" && hook["async"] != true },
 	Disabled:   func(obj map[string]any) bool { return obj["disableAllHooks"] == true },
@@ -64,7 +64,8 @@ func Remove(path string) (bool, error) { return Spec.Remove(path) }
 // Inspect reads each project settings file; see agenthook.Spec.Inspect.
 func Inspect(root string) []Status { return Spec.Inspect(root) }
 
-// Controls returns the settings files that currently reference the SAGA hook.
+// Controls returns the settings files that currently carry an effective
+// preventive SAGA hook; see agenthook.Spec.Controls.
 func Controls(root string) []string { return Spec.Controls(root) }
 
 // Digest fingerprints the named files; see agenthook.Digest.

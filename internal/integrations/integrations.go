@@ -23,7 +23,8 @@ func Files() []string {
 	return files
 }
 
-// Controls lists the files that currently reference a SAGA hook.
+// Controls lists the files that currently carry an effective preventive SAGA
+// hook; see agenthook.Spec.Controls.
 func Controls(root string) []string {
 	var files []string
 	for _, s := range Specs {
@@ -32,10 +33,10 @@ func Controls(root string) []string {
 	return files
 }
 
-// ForAgent returns the integration of the agent a command starts, by the
-// executable's base name, or nil for a command without a supported hook.
-func ForAgent(command string) *agenthook.Spec {
-	name := filepath.Base(command)
+// ForAgent returns the integration of the agent an executable starts, by its
+// base name, or nil for an executable without a supported hook.
+func ForAgent(executable string) *agenthook.Spec {
+	name := filepath.Base(executable)
 	for _, s := range Specs {
 		if s.Agent == name {
 			return s

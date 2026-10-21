@@ -143,7 +143,7 @@ func agentDoctor(spec *agenthook.Spec, g gitinfo.Info, c config.Config) int {
 		fmt.Println("! Codex cannot fail closed when the adapter is missing or times out; keep saga-watchdog on PATH")
 		fmt.Println("! Shell commands and MCP arguments are not interpreted; apply_patch is checked per named file")
 	case "gemini":
-		fmt.Println("! Gemini CLI runs project hooks only in a trusted folder and cannot fail closed when the adapter is missing")
+		fmt.Println("! Gemini CLI runs project hooks only in a trusted folder and cannot fail closed when the adapter is missing or times out")
 		fmt.Println("! Shell commands, MCP arguments and prompt-only web_fetch calls are not interpreted")
 	}
 	return code
@@ -172,6 +172,9 @@ func (r *readiness) check(ok bool, pass, failure string) {
 	}
 	r.checks = append(r.checks, readinessCheck{ok: ok, text: text})
 }
+
+// fail records a check that can only fail.
+func (r *readiness) fail(text string) { r.check(false, "", text) }
 
 // problems lists the failed checks.
 func (r readiness) problems() []string {
@@ -203,7 +206,7 @@ func hookReadiness(spec *agenthook.Spec, root string) readiness {
 			case err != nil || version == "":
 				r.notes = append(r.notes, "claude --version failed; compatibility not verified")
 			default:
-				r.check(claudecode.AtLeast(version, claudecode.MinimumVersion), fmt.Sprintf("Claude Code %s supports onFailure: block (fail-closed hooks)", version), fmt.Sprintf("Claude Code %s predates %s; Claude cannot fail closed on hook errors, only the adapter does; upgrade Claude Code", version, claudecode.MinimumVersion))
+				r.check(claudecode.AtLeast(version, claudecode.MinimumVersion), fmt.Sprintf("Claude Code %s supports onFailure: block (can block when the hook cannot run)", version), fmt.Sprintf("Claude Code %s predates %s; Claude cannot fail closed on hook errors, only the adapter does; upgrade Claude Code", version, claudecode.MinimumVersion))
 			}
 		case "codex":
 			// The hooks feature flag is reported by the CLI itself; a build that
@@ -228,17 +231,17 @@ func hookReadiness(spec *agenthook.Spec, root string) readiness {
 		path := filepath.Join(root, filepath.FromSlash(s.File))
 		switch {
 		case s.Err != nil:
-			r.check(false, "", s.File+": "+event.Redact(s.Err.Error()))
+			r.fail(s.File + ": " + event.Redact(s.Err.Error()))
 		case s.Disabled:
-			r.check(false, "", s.File+" disables hooks; the SAGA hook does not run")
+			r.fail(s.File + " disables hooks; the SAGA hook does not run")
 		}
 		if !s.Configured {
 			continue
 		}
 		configured = true
 		want := "runs the SAGA " + spec.PreEvent + " hook with the expected matcher"
-		if spec.Agent == "claude" {
-			want = "runs the SAGA PreToolUse hook with onFailure: block"
+		if spec.FailClosed != "" {
+			want = "runs the SAGA " + spec.PreEvent + " hook with onFailure: block"
 		}
 		r.check(s.Preventive, s.File+" "+want, s.File+" references SAGA but "+spec.PreEvent+" is missing, uses another matcher or cannot block; compare with: saga-watchdog "+spec.Agent+" config")
 		if info, err := os.Lstat(path); err == nil && runtime.GOOS != "windows" {
@@ -246,7 +249,7 @@ func hookReadiness(spec *agenthook.Spec, root string) readiness {
 		}
 	}
 	if !configured {
-		r.check(false, "", "no SAGA hook in "+strings.Join(spec.Files, " or ")+"; run: saga-watchdog "+spec.Agent+" setup")
+		r.fail("no SAGA hook in " + strings.Join(spec.Files, " or ") + "; run: saga-watchdog " + spec.Agent + " setup")
 	}
 	return r
 }
