@@ -12,9 +12,12 @@ import (
 // coverage states what a run with this policy and these hook controls checks
 // before execution, observes afterwards and cannot see at all. The doctor and
 // the run banner print the same lines, so neither can claim more than the
-// other. contextID is the trusted security context, or empty with the reason
-// correlation is off in disabledReason.
-func coverage(c config.Config, controls []string, contextID, disabledReason string) []string {
+// other. agent is the executable name a run starts, so a hook installed for
+// another agent is reported as not loaded rather than as coverage; the doctor
+// passes "" to describe every installed hook. contextID is the trusted
+// security context, or empty with the reason correlation is off in
+// disabledReason.
+func coverage(c config.Config, controls []string, agent, contextID, disabledReason string) []string {
 	var lines []string
 	hooked := false
 	for _, spec := range integrations.Specs {
@@ -27,6 +30,10 @@ func coverage(c config.Config, controls []string, contextID, disabledReason stri
 		if len(files) == 0 {
 			continue
 		}
+		if agent != "" && spec.Agent != agent {
+			lines = append(lines, fmt.Sprintf("Pre-action checks: %s hook in %s is installed but not loaded by %s; it covers nothing in this run", spec.Name, strings.Join(files, ", "), agent))
+			continue
+		}
 		hooked = true
 		lines = append(lines, fmt.Sprintf("Pre-action checks: %s hook in %s for matched tools only; shell command text, MCP arguments and file reads are not interpreted", spec.Name, strings.Join(files, ", ")))
 		if spec.FailClosed != "" {
@@ -36,7 +43,7 @@ func coverage(c config.Config, controls []string, contextID, disabledReason stri
 		}
 	}
 	if !hooked {
-		lines = append(lines, "Pre-action checks: none; without a hook or a cooperative check call nothing is prevented, only supervised and observed afterwards")
+		lines = append(lines, "Pre-action checks: none for "+orAny(agent)+"; without a hook or a cooperative check call nothing is prevented, only supervised and observed afterwards")
 	}
 	lines = append(lines,
 		fmt.Sprintf("Network: cooperative checks of reported hosts (%s mode); no connection is blocked at the OS level", c.Network.Mode),
@@ -52,4 +59,11 @@ func coverage(c config.Config, controls []string, contextID, disabledReason stri
 		lines = append(lines, "Authority correlation: this run only ("+disabledReason+")")
 	}
 	return lines
+}
+
+func orAny(agent string) string {
+	if agent == "" {
+		return "any agent"
+	}
+	return agent
 }

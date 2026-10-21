@@ -253,7 +253,7 @@ func doctor(g gitinfo.Info, c config.Config) int {
 		contextID = ctxID.ID()
 	}
 	fmt.Println("Coverage")
-	for _, line := range coverage(c, controls, contextID, disabled) {
+	for _, line := range coverage(c, controls, "", contextID, disabled) {
 		fmt.Println("  " + line)
 	}
 	fmt.Println("! Integrations report events; they do not prove OS actions occurred")

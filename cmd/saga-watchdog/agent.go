@@ -119,7 +119,7 @@ func agentCLI(spec *agenthook.Spec, args []string) int {
 
 func agentDoctor(spec *agenthook.Spec, g gitinfo.Info, c config.Config) int {
 	code := doctor(g, c)
-	ready := hookReadiness(spec, g.Root)
+	ready := hookReadiness(spec, g.Root, spec.Agent)
 	for _, ch := range ready.checks {
 		if ch.ok {
 			fmt.Println("OK", ch.text)
@@ -188,13 +188,15 @@ func (r readiness) problems() []string {
 }
 
 // hookReadiness runs the agent-specific pre-flight checks that the agent
-// doctor prints and run.require_preventive_hook refuses on.
-func hookReadiness(spec *agenthook.Spec, root string) readiness {
+// doctor prints and run.require_preventive_hook refuses on. executable is
+// the agent as it will be started: a bare name looked up on PATH, or the
+// path a run was given, so the probe never approves a different binary.
+func hookReadiness(spec *agenthook.Spec, root, executable string) readiness {
 	var r readiness
 	_, err := exec.LookPath("saga-watchdog")
 	r.check(err == nil, "saga-watchdog is on PATH for the hook command", "saga-watchdog is not on PATH; the hook command cannot start")
-	agentPath, err := exec.LookPath(spec.Agent)
-	r.check(err == nil, spec.Agent+" executable found", spec.Agent+" executable not found on PATH")
+	agentPath, err := exec.LookPath(executable)
+	r.check(err == nil, spec.Agent+" executable found: "+agentPath, executable+" is not an executable on PATH or at that path")
 	if err == nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -204,7 +206,9 @@ func hookReadiness(spec *agenthook.Spec, root string) readiness {
 			version := claudecode.Version(string(out))
 			switch {
 			case err != nil || version == "":
-				r.notes = append(r.notes, "claude --version failed; compatibility not verified")
+				// Without a version the fail-closed contract is unknown; a
+				// hardened run must not pass on an unverified capability.
+				r.fail("claude --version failed; the onFailure: block contract cannot be verified")
 			default:
 				r.check(claudecode.AtLeast(version, claudecode.MinimumVersion), fmt.Sprintf("Claude Code %s supports onFailure: block (can block when the hook cannot run)", version), fmt.Sprintf("Claude Code %s predates %s; Claude cannot fail closed on hook errors, only the adapter does; upgrade Claude Code", version, claudecode.MinimumVersion))
 			}
@@ -213,7 +217,7 @@ func hookReadiness(spec *agenthook.Spec, root string) readiness {
 			// disables it never runs the hook.
 			out, err := exec.CommandContext(ctx, agentPath, "features", "list").Output()
 			if err != nil {
-				r.notes = append(r.notes, "codex features list failed; hooks feature not verified")
+				r.fail("codex features list failed; the hooks feature cannot be verified")
 			} else {
 				r.check(featureEnabled(string(out), "hooks"), "codex reports the hooks feature enabled", "codex reports the hooks feature disabled; enable it with: codex features enable hooks")
 			}

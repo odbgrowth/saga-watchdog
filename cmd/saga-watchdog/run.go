@@ -34,13 +34,10 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 	}
 	// A hardened policy wants proof that the agent's own hook is in place
 	// before anything starts; a run record is not written for a refusal.
-	var required *agenthook.Spec
 	if c.Run.RequirePreventiveHook {
-		spec, err := requirePreventiveHook(g.Root, command[0])
-		if err != nil {
+		if err := requirePreventiveHook(g.Root, command[0]); err != nil {
 			return fail(err)
 		}
-		required = spec
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -146,8 +143,12 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 	// for this run. They are fingerprinted now, after the observer is live, and
 	// protected like the policy file until the run ends.
 	r.Controls = integrations.Controls(g.Root)
-	if required != nil && !slices.ContainsFunc(required.Files, func(file string) bool { return slices.Contains(r.Controls, file) }) {
-		return finish("failed", "run.require_preventive_hook: the "+required.Name+" hook configuration changed during startup", 125)
+	// The first check ran before the observer was live; a change in that
+	// window (to the file, its permissions or the agent) fails the run.
+	if c.Run.RequirePreventiveHook {
+		if err := requirePreventiveHook(g.Root, command[0]); err != nil {
+			return finish("failed", err.Error()+" (changed during startup)", 125)
+		}
 	}
 	controlsDigest := map[string]string{}
 	if len(r.Controls) > 0 {
@@ -268,9 +269,14 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 		stopAndWait()
 		return finish("failed", err.Error(), 125)
 	}
+	// A hook counts for this run only when the launched agent is the one
+	// that loads it; another agent's hook is installed, not active.
 	hooks := "none (supervision and observation only)"
 	if len(r.Controls) > 0 {
-		hooks = "preventive via " + strings.Join(r.Controls, ", ")
+		hooks = "installed for another agent (" + strings.Join(r.Controls, ", ") + "); none loaded by " + r.Agent
+		if spec := integrations.ForAgent(command[0]); spec != nil && slices.ContainsFunc(spec.Files, func(file string) bool { return slices.Contains(r.Controls, file) }) {
+			hooks = "preventive via " + strings.Join(r.Controls, ", ")
+		}
 	}
 	contextLine := secCtx.ID() + " (" + secCtx.OperatorID + ", " + secCtx.AuthorizationContextID + "); restrictions persist across runs"
 	if disabled != "" {
@@ -292,7 +298,7 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 		contextID = secCtx.ID()
 	}
 	fmt.Fprintln(os.Stderr, "Coverage")
-	for _, line := range coverage(c, r.Controls, contextID, disabled) {
+	for _, line := range coverage(c, r.Controls, r.Agent, contextID, disabled) {
 		fmt.Fprintln(os.Stderr, "  "+line)
 	}
 	fmt.Fprintf(os.Stderr, "Starting %s\n", event.Redact(r.Agent))
@@ -872,22 +878,23 @@ func run(g gitinfo.Info, c config.Config, hash string, command []string) int {
 	}
 }
 
-// requirePreventiveHook identifies the supported agent a command starts and
-// verifies that agent's own hook, not merely any installed hook. It reuses
-// the agent doctor's checks and refuses with every failed one. A command
-// without a supported integration cannot be verified and is refused rather
-// than declared protected.
-func requirePreventiveHook(root, executable string) (*agenthook.Spec, error) {
+// requirePreventiveHook identifies the supported agent an executable starts
+// and verifies that agent's own hook, not merely any installed hook. It
+// reuses the agent doctor's checks against the executable that will run and
+// refuses with every failed one. An executable without a supported
+// integration cannot be verified and is refused rather than declared
+// protected.
+func requirePreventiveHook(root, executable string) error {
 	spec := integrations.ForAgent(executable)
 	if spec == nil {
 		var agents []string
 		for _, s := range integrations.Specs {
 			agents = append(agents, s.Agent)
 		}
-		return nil, fmt.Errorf("run.require_preventive_hook: preventive integration cannot be verified for %q; supported agents are %s. A generic command is supervised and observed after the fact only: start a supported agent, or set run.require_preventive_hook: false to run without pre-action coverage", filepath.Base(executable), strings.Join(agents, ", "))
+		return fmt.Errorf("run.require_preventive_hook: preventive integration cannot be verified for %q; supported agents are %s. A generic command is supervised and observed after the fact only: start a supported agent, or set run.require_preventive_hook: false to run without pre-action coverage", filepath.Base(executable), strings.Join(agents, ", "))
 	}
-	if problems := hookReadiness(spec, root).problems(); len(problems) > 0 {
-		return nil, fmt.Errorf("run.require_preventive_hook: the %s preventive hook is not ready for %q:\n  - %s\nFix the items above (saga-watchdog %s doctor), or set run.require_preventive_hook: false", spec.Name, filepath.Base(executable), strings.Join(problems, "\n  - "), spec.Agent)
+	if problems := hookReadiness(spec, root, executable).problems(); len(problems) > 0 {
+		return fmt.Errorf("run.require_preventive_hook: the %s preventive hook is not ready for %q:\n  - %s\nFix the items above (saga-watchdog %s doctor), or set run.require_preventive_hook: false", spec.Name, filepath.Base(executable), strings.Join(problems, "\n  - "), spec.Agent)
 	}
-	return spec, nil
+	return nil
 }

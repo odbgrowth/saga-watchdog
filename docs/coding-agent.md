@@ -425,7 +425,8 @@ not prove that the agent invokes it or honours every failure, and only
 Claude Code blocks a call when the hook itself cannot run.
 
 The run banner and `doctor` print the same `Coverage` lines: which hook
-checks before execution and how it fails, that network and tool checks are
+checks before execution and how it fails (a hook installed for another agent
+is listed as installed but not loaded by the launched one), that network and tool checks are
 cooperative, that file writes are checked before execution only through a
 hook, that credential reads, detached processes and other hosts are not
 observed, and whether authority correlation persists for the context.

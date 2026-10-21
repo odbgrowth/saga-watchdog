@@ -116,7 +116,9 @@ guaranteed isolation, complete containment or unbypassable control.
 launched executable is a supported agent whose own hook passes the locally
 checkable prerequisites (hook configured and able to block, not disabled,
 not world-writable, hook command and agent on `PATH`, a Claude Code version
-with `onFailure: "block"` or the Codex hooks feature enabled). It verifies
+with `onFailure: "block"` or the Codex hooks feature enabled; a version or
+feature query that fails is a failed check). The checks probe the executable
+the run will start, not merely the one on `PATH`. It verifies
 configuration, not behaviour: it cannot prove that the agent loads the hook,
 that the project is trusted by the agent, or that every failure is honoured.
 A generic command is refused because its coverage cannot be verified.

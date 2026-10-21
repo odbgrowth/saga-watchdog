@@ -40,7 +40,7 @@ func fakeAgents(t *testing.T, claudeVersion string) []string {
 	t.Helper()
 	bin := t.TempDir()
 	for name, body := range map[string]string{
-		"claude":        "#!/bin/sh\ncase \"$1\" in --version) echo '" + claudeVersion + " (Claude Code)'; exit 0;; esac\nexec bash \"$@\"\n",
+		"claude":        "#!/bin/sh\ncase \"$1\" in --version) " + claudeVersionReply(claudeVersion) + ";; esac\nexec bash \"$@\"\n",
 		"codex":         "#!/bin/sh\ncase \"$1\" in features) printf 'hooks   stable   true\\n'; exit 0;; esac\nexec bash \"$@\"\n",
 		"gemini":        "#!/bin/sh\ncase \"$1\" in --version) echo '0.63.0'; exit 0;; esac\nexec bash \"$@\"\n",
 		"saga-watchdog": "#!/bin/sh\nexit 0\n",
@@ -50,6 +50,15 @@ func fakeAgents(t *testing.T, claudeVersion string) []string {
 		}
 	}
 	return []string{"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"), "SAGA_TEST_BIN=" + os.Args[0]}
+}
+
+// claudeVersionReply is what the fake claude prints for --version; an empty
+// version makes the query fail, as an unknown build would.
+func claudeVersionReply(version string) string {
+	if version == "" {
+		return "exit 1"
+	}
+	return "echo '" + version + " (Claude Code)'; exit 0"
 }
 
 // Scenarios 1 to 7: run.require_preventive_hook admits only the launched
@@ -106,6 +115,13 @@ func TestRequirePreventiveHookAdmitsOnlyTheMatchingReadyHook(t *testing.T) {
 	if code != 2 || !strings.Contains(out, "predates "+claudecode.MinimumVersion) {
 		t.Fatalf("old Claude: exit %d: %s", code, out)
 	}
+	// An unanswered capability query is a failed check, not a pass.
+	code, out = runCLI(t, root, fakeAgents(t, ""), "run", "--", "claude", "-c", "true")
+	if code != 2 || !strings.Contains(out, "claude --version failed") {
+		t.Fatalf("unverifiable Claude: exit %d: %s", code, out)
+	}
+	// The executable that will run is probed, not the one on PATH.
+	refused([]string{"run", "--", filepath.Join(root, "elsewhere", "claude"), "-c", "true"}, "is not an executable on PATH or at that path")
 	post := `{"hooks":{"PostToolUse":[{"matcher":"` + claudecode.Matcher + `","hooks":[{"type":"command","command":"` + claudecode.Command + `"}]}]}}`
 	if err := os.WriteFile(filepath.Join(root, ".claude", "settings.json"), []byte(post), 0600); err != nil {
 		t.Fatal(err)
@@ -128,11 +144,20 @@ func TestRequirePreventiveHookAdmitsOnlyTheMatchingReadyHook(t *testing.T) {
 	// 18: the banner says that nothing is prevented without a hook.
 	legacy := fixture(t, "version: 1\nprofile: coding-agent\nmode: enforce\nrun:\n  max_duration: 20s\n  stop_grace_period: 50ms\n")
 	code, out = runCLI(t, legacy, env, "run", "--", "bash", "-c", "true")
-	if code != 0 || !strings.Contains(out, "Pre-action checks: none; without a hook or a cooperative check call nothing is prevented") {
+	if code != 0 || !strings.Contains(out, "Pre-action checks: none for bash; without a hook or a cooperative check call nothing is prevented") {
 		t.Fatalf("legacy generic run: exit %d: %s", code, out)
 	}
-	if code, out := runCLI(t, legacy, env, "run", "--", "codex", "-c", "true"); code != 0 || !strings.Contains(out, "Hooks    none") {
+	if code, out := runCLI(t, legacy, env, "run", "--", "codex", "-c", "true"); code != 0 || !strings.Contains(out, "Hooks    none") || !strings.Contains(out, "Pre-action checks: none for codex") {
 		t.Fatalf("legacy codex run without hook: exit %d: %s", code, out)
+	}
+	// Another agent's hook is installed, not coverage: Codex never inherits
+	// Claude's fail-closed claim.
+	if _, err := claudecode.Setup(filepath.Join(legacy, ".claude", "settings.json")); err != nil {
+		t.Fatal(err)
+	}
+	code, out = runCLI(t, legacy, env, "run", "--", "codex", "-c", "true")
+	if code != 0 || !strings.Contains(out, "Hooks    installed for another agent (.claude/settings.json); none loaded by codex") || !strings.Contains(out, "Claude Code hook in .claude/settings.json is installed but not loaded by codex") || !strings.Contains(out, "Pre-action checks: none for codex") || strings.Contains(out, "fail-closed on both sides") {
+		t.Fatalf("legacy codex run beside a Claude hook: exit %d: %s", code, out)
 	}
 	if code, out := runCLI(t, legacy, env, "doctor"); code != 0 || strings.Contains(out, "require_preventive_hook") || !strings.Contains(out, "Coverage") {
 		t.Fatalf("legacy doctor: exit %d: %s", code, out)
