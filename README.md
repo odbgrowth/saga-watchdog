@@ -13,12 +13,14 @@ behaviour is safe. Policy is a handful of explicit rules over observable
 events, evaluated by deterministic Go code with no LLM, no cloud service and
 no database.
 
-**Status:** v0.5.1 is the current release, with Linux and macOS archives on
+**Status:** v0.6.0 is the current release, with Linux and macOS archives on
 the [Releases page](https://github.com/odbgrowth/saga-watchdog/releases).
-v0.5 adds persistent authority restrictions across runs and sessions,
-detection of agent replication and cross-host authority expansion, and
-agent-instance provenance without inherited authority; v0.5.1 makes
-`saga-watchdog version` report the installed version after `go install`.
+v0.6 can require the launched agent's own preventive hook before a run starts
+(`run.require_preventive_hook`), pauses for MCP and VS Code task
+configuration changes, prints the same coverage statements in `doctor` and
+the run banner, and ships a hardened example policy with tool allowlists and
+named effects. v0.5 added persistent authority restrictions across runs and
+sessions, agent replication detection and instance provenance.
 Development continues on `main`.
 
 ## Why it exists
@@ -74,7 +76,7 @@ Use a Linux environment such as WSL on Windows; native Windows supervision and
 Docker named pipes are unsupported.
 
 ```sh
-go install github.com/odbgrowth/saga-watchdog/cmd/saga-watchdog@v0.5.1
+go install github.com/odbgrowth/saga-watchdog/cmd/saga-watchdog@v0.6.0
 export PATH="$(go env GOPATH)/bin:$PATH"
 saga-watchdog version
 ```
