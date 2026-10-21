@@ -97,12 +97,22 @@ check: it fails when the project settings disable the hook. After a run,
 `saga-watchdog report` warns when `.gemini/settings.json` carried the hook
 but no pre-action check ever arrived from Gemini CLI.
 
+`run.require_preventive_hook: true` makes `saga-watchdog run -- gemini`
+refuse to start unless `.gemini/settings.json` carries the SAGA `BeforeTool`
+hook, nothing in it disables hooks, and the hook command and `gemini` are on
+`PATH`. It checks configuration, not behaviour: it cannot see whether the
+folder is trusted, and it does not make Gemini CLI fail closed. The run
+banner says so: the adapter fails closed, Gemini CLI lets a call proceed
+when the hook cannot start or times out.
+
 ## 6. Protected configuration
 
 While a run is active, `.gemini/settings.json` is a control file: any change
 to it stops the run (`hook-tamper`, kill), including removing the `.gemini`
-directory. User-level `~/.gemini/settings.json` is outside the project and
-outside SAGA's protection.
+directory. A `write_file` or `replace` of `.mcp.json`, `.vscode/mcp.json` or
+`.vscode/tasks.json` pauses the run (`project-config-modification`).
+User-level `~/.gemini/settings.json` is outside the project and outside
+SAGA's protection.
 
 ## 7. Limitations
 

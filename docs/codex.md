@@ -101,14 +101,23 @@ runs hooks that were accepted earlier; it cannot accept new ones. After a
 run, `saga-watchdog report` warns when `.codex/hooks.json` carried the hook
 but no pre-action check ever arrived from Codex.
 
+`run.require_preventive_hook: true` makes `saga-watchdog run -- codex`
+refuse to start unless `.codex/hooks.json` carries a blocking SAGA hook, the
+hook command and `codex` are on `PATH` and `codex features list` reports
+hooks enabled. It checks configuration, not behaviour: it cannot see whether
+the hook was accepted in the startup review, and it does not make Codex fail
+closed. The run banner says so: the adapter fails closed, Codex lets a call
+proceed when the hook cannot start or times out.
+
 ## 6. Protected configuration
 
 While a run is active, `.codex/hooks.json` is a control file: any change to
 it stops the run (`hook-tamper`, kill), including removing the `.codex`
 directory. A change to `.codex/config.toml` pauses the run
 (`agent-config-modification`), because its inline hooks or feature flags can
-disable the hook. User-level `~/.codex` is outside the project and outside
-SAGA's protection.
+disable the hook. A patch that names `.mcp.json`, `.vscode/mcp.json` or
+`.vscode/tasks.json` pauses the run as well (`project-config-modification`).
+User-level `~/.codex` is outside the project and outside SAGA's protection.
 
 ## 7. Limitations
 

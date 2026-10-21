@@ -99,9 +99,9 @@ saga-watchdog run -- claude
 ```
 
 The default policy refuses `main` and `master`, treats changes to
-`.saga-watchdog.yaml` as tampering, pauses for Git security, CI workflow and
-secret-like file changes, detects deletion bursts, escalates repeated denials
-and stops a run after two hours. The policy stays fixed for the run. The
+`.saga-watchdog.yaml` as tampering, pauses for Git security, CI workflow,
+MCP and VS Code task configuration and secret-like file changes, detects
+deletion bursts, escalates repeated denials and stops a run after two hours. The policy stays fixed for the run. The
 [coding-agent guide](docs/coding-agent.md) covers configuration, controls and
 the generic `check`/`emit` integration; the [shell demo](examples/DEMO.md)
 shows it working without any AI account.
@@ -142,6 +142,58 @@ troubleshooting, and the [Claude demo](examples/claude-code.md) for a
 reproducible walkthrough. The [Codex guide](docs/codex.md) and the
 [Gemini CLI guide](docs/gemini-cli.md) cover what differs for those agents,
 including the cases where the agent itself cannot fail closed.
+
+A started supervisor does not prove that the hook is in place: a project can
+carry the Claude Code hook while you start Codex. With
+`run.require_preventive_hook: true` in the policy, `run` refuses to start
+unless the launched agent is a supported one and its own hook passes the
+checks of `saga-watchdog <agent> doctor`. A generic command is refused with
+the explanation that its coverage cannot be verified. `doctor` and the run
+banner print the same `Coverage` lines: what is checked before execution,
+what is observed afterwards, and what SAGA cannot see at all.
+
+## Default mode and the hardened example
+
+The default policy gives lightweight protection and visibility: it blocks
+little beyond tampering with policy, hooks, Git security, CI, tool and editor
+configuration and secret-like files, and otherwise supervises and records.
+[examples/hardened-coding-agent.yaml](examples/hardened-coding-agent.yaml)
+is a copyable, narrower policy for sensitive work: enforce mode, the required
+matching hook, a small network allowlist, a small MCP tool allowlist with
+named effects for publication, messaging, forms and deployment, extra
+protected project files, a security context for persistent restrictions,
+and no replication. Everything outside the lists pauses the run until an
+operator grants it for that run. Neither policy replaces OS isolation: a
+separate user, container or VM is still the privilege boundary.
+
+The hardened example answers four incident patterns seen in agent
+deployments, within the limits of what SAGA can observe:
+
+1. **Unauthorized external actions and proxy bypass.** Publishing a
+   repository, sending a message, submitting a form or deploying through an
+   MCP tool is refused before execution when the call passes through a
+   supported hook (`tool-unlisted`, `tool-denied`), and so is a fetch of an
+   unlisted host (`network-unlisted`) or a URL shortener. A second tool with
+   the same declared `effect` continues the same restriction. A shell
+   command, a browser or any tool outside a hook matcher is not interpreted
+   and is reported as uncovered; the filesystem observer sees only its file
+   effects afterwards.
+2. **Agent and tool configuration compromise.** The files that carry the
+   active hook stop the run when changed; sibling agent settings, `.mcp.json`,
+   `.vscode/mcp.json`, `.vscode/tasks.json`, Git hooks and CI workflows pause
+   it for review. Through a hook the write is refused first; otherwise it is
+   observed after the fact. User-level configuration outside the project is
+   not seen.
+3. **Persistent use of credentials after an earlier denial.** With an
+   operator identity and an authorization context, a denial becomes a
+   restriction that survives runs and model sessions; a later retry or an
+   alternate route to the same effect is `authority-expansion-after-denial`.
+   Raw credential reads are not observable; only tool calls and hosts that an
+   integration reports are.
+4. **Replication across sessions and hosts.** New agent instances, workers,
+   inference endpoints and remote hosts are denied unless `replication`
+   lists them, through the existing nested-run, integration and Docker
+   observer signals. A runtime started outside those signals is invisible.
 
 ## Security context
 
@@ -242,6 +294,7 @@ Run `saga-watchdog --help` for arguments.
 - [Codex CLI guide](docs/codex.md) and [Gemini CLI guide](docs/gemini-cli.md)
 - [Docker observer guide](docs/docker-observer.md)
 - [Shell demo](examples/DEMO.md) and [Claude Code demo](examples/claude-code.md)
+- [Hardened coding-agent example](examples/hardened-coding-agent.yaml)
 - [Contributing, tests and release process](CONTRIBUTING.md)
 - [Security policy, threat model and limitations](SECURITY.md)
 

@@ -112,6 +112,26 @@ For generic `check` integrations the same holds for whatever wrapper calls
 `check` and honours the answer. No other action is prevented. There is no
 guaranteed isolation, complete containment or unbypassable control.
 
+`run.require_preventive_hook: true` makes a run refuse to start unless the
+launched executable is a supported agent whose own hook passes the locally
+checkable prerequisites (hook configured and able to block, not disabled,
+not world-writable, hook command and agent on `PATH`, a Claude Code version
+with `onFailure: "block"` or the Codex hooks feature enabled). It verifies
+configuration, not behaviour: it cannot prove that the agent loads the hook,
+that the project is trusted by the agent, or that every failure is honoured.
+A generic command is refused because its coverage cannot be verified.
+`doctor` and the run banner print the same coverage statements rather than
+a score.
+
+Changes to `.mcp.json`, `.vscode/mcp.json` and `.vscode/tasks.json`, which
+make a tool or an editor execute something from the repository, pause every
+run for review. Through a hook the write is refused first; otherwise the
+filesystem observer reports it afterwards. Ordinary source files, package
+manifests and lockfiles are not protected by default, and a dependency that
+executes code during installation is outside SAGA's control: host isolation,
+least-privilege credentials and dependency controls address that. SAGA
+cannot revoke credentials it does not manage.
+
 ## Fail-closed scope
 
 The deliberately configured agent hook fails closed on the SAGA side: a
@@ -120,10 +140,13 @@ response or an uninterpretable event blocks the tool call. Only Claude Code
 (2.1.295 or newer, `onFailure: "block"`) also blocks when the adapter itself
 cannot start or times out; Codex CLI and Gemini CLI log such a failure and
 let the call proceed, and both skip a project hook they do not trust. This
-scope is intentional and narrow. Generic supervision of an arbitrary CLI is not turned into universal
-fail-closed execution: an agent without a hook keeps running when the
-supervisor cannot see an action, and observe mode allows policy violations by
-design.
+scope is intentional and narrow. Generic supervision of an arbitrary CLI is
+not turned into universal fail-closed execution: an agent without a hook
+keeps running when the supervisor cannot see an action, and observe mode
+allows policy violations by design. `run.require_preventive_hook` does not
+change this: it refuses to start without the matching hook, and it reports
+Codex CLI and Gemini CLI hooks as not fail-closed on the agent side rather
+than labelling them complete.
 
 ## Same-user boundary
 
@@ -132,7 +155,7 @@ Unix user. A sufficiently capable same-user process can potentially signal
 the supervisor, alter its on-disk configuration, state or logs, reach its
 sockets, or change another same-user process. SAGA detects and reacts to
 tampering with `.saga-watchdog.yaml` and with the settings files that carry
-the Claude hook, but process separation is not a tamper-resistant privilege
+an agent hook, but process separation is not a tamper-resistant privilege
 boundary.
 
 The same applies to persistent authority state. It lives in the operator's
