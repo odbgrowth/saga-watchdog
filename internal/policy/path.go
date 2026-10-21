@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/odbgrowth/saga-watchdog/internal/config"
 )
 
 // Normalize returns a slash-separated path relative to the canonical project
@@ -181,11 +183,20 @@ func matchSegments(pattern, target []string) bool {
 
 // agentSettings are the project files of supported agents that can carry or
 // disable the SAGA preventive hook: Claude Code settings, Codex hooks.json and
-// config.toml, Gemini CLI settings.
+// config.toml, Gemini CLI settings. The list is kept here rather than derived
+// from the adapters because policy must not depend on them (the socket depends
+// on policy, every adapter on the socket); TestAgentSettingsCoverEveryAdapter
+// checks that it covers every adapter's files.
 var agentSettings = []string{".claude/settings.json", ".claude/settings.local.json", ".codex/hooks.json", ".codex/config.toml", ".gemini/settings.json"}
 
+// projectConfig are repository files that make a tool or an editor execute
+// something: MCP server definitions and VS Code tasks. A change pauses the
+// run for review in every project, like a CI workflow change. Ordinary editor
+// preferences are not listed; add them with filesystem.protect when needed.
+var projectConfig = []string{".mcp.json", ".vscode/mcp.json", ".vscode/tasks.json"}
+
 // Controls cannot be hidden by a broad ignore such as .git/** or **.
-var controlPatterns = append([]string{".saga-watchdog.yaml", ".git/config", ".git/hooks/**", ".github/workflows/**"}, agentSettings...)
+var controlPatterns = append(append([]string{config.Filename, ".git/config", ".git/hooks/**", ".github/workflows/**"}, agentSettings...), projectConfig...)
 
 func Ignored(target string, patterns []string) bool {
 	target = strings.TrimSuffix(strings.ReplaceAll(target, "\\", "/"), "/")

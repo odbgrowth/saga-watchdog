@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/odbgrowth/saga-watchdog/internal/config"
@@ -225,22 +226,38 @@ func doctor(g gitinfo.Info, c config.Config) int {
 		source.Close()
 	}
 	cancel()
-	hooked := false
+	controls := integrations.Controls(g.Root)
 	for _, spec := range integrations.Specs {
-		if controls := spec.Controls(g.Root); len(controls) > 0 {
-			hooked = true
-			fmt.Printf("OK %s preventive hook configured in %s (verify: saga-watchdog %s doctor)\n", spec.Name, strings.Join(controls, ", "), spec.Agent)
+		var files []string
+		for _, file := range spec.Files {
+			if slices.Contains(controls, file) {
+				files = append(files, file)
+			}
+		}
+		if len(files) > 0 {
+			fmt.Printf("OK %s preventive hook configured in %s (verify: saga-watchdog %s doctor)\n", spec.Name, strings.Join(files, ", "), spec.Agent)
 		}
 	}
-	if !hooked {
+	if len(controls) == 0 {
 		fmt.Println("! No preventive agent hook; supervision and observation only (optional: saga-watchdog claude|codex|gemini setup)")
 	}
 	if doctorAuthority(g, c) != 0 {
 		code = 2
 	}
-	fmt.Println("! File READ monitoring and raw network enforcement are unavailable")
+	if c.Run.RequirePreventiveHook {
+		fmt.Println("OK run.require_preventive_hook: run refuses to start unless the launched agent's own hook is configured and ready (saga-watchdog claude|codex|gemini doctor)")
+	}
+	ctxID, disabled, _, err := cliContext(g, c, "")
+	contextID := ""
+	if err == nil && disabled == "" {
+		contextID = ctxID.ID()
+	}
+	fmt.Println("Coverage")
+	for _, line := range coverage(c, controls, "", contextID, disabled) {
+		fmt.Println("  " + line)
+	}
 	fmt.Println("! Integrations report events; they do not prove OS actions occurred")
-	fmt.Println("! Same-user separation is not a sandbox; detached processes can escape the group")
+	fmt.Println("! Same-user separation is not a sandbox")
 	fmt.Println("Core protection level: LOCAL")
 	return code
 }

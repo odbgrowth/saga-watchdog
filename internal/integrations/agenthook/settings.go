@@ -25,6 +25,12 @@ type Spec struct {
 	Matcher  string   // tool matcher on the pre-action event
 	PreEvent string   // pre-action hook event name
 	Files    []string // project-relative files; the first is the setup default
+	// FailClosed names the documented contract under which the agent itself
+	// blocks the tool call when the hook command cannot start, crashes or
+	// times out, such as "onFailure: block, 2.1.295 or newer". The adapter
+	// always fails closed on its own side; an empty value means the agent
+	// lets such a call proceed.
+	FailClosed string
 	// Hooks returns the event groups SAGA installs under the file's "hooks" key.
 	Hooks func() map[string]any
 	// Preventive adds agent-specific conditions for a pre-action entry to count

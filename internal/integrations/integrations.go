@@ -3,6 +3,8 @@
 package integrations
 
 import (
+	"path/filepath"
+
 	"github.com/odbgrowth/saga-watchdog/internal/integrations/agenthook"
 	"github.com/odbgrowth/saga-watchdog/internal/integrations/claudecode"
 	"github.com/odbgrowth/saga-watchdog/internal/integrations/codex"
@@ -21,11 +23,24 @@ func Files() []string {
 	return files
 }
 
-// Controls lists the files that currently reference a SAGA hook.
+// Controls lists the files that currently carry an effective preventive SAGA
+// hook; see agenthook.Spec.Controls.
 func Controls(root string) []string {
 	var files []string
 	for _, s := range Specs {
 		files = append(files, s.Controls(root)...)
 	}
 	return files
+}
+
+// ForAgent returns the integration of the agent an executable starts, by its
+// base name, or nil for an executable without a supported hook.
+func ForAgent(executable string) *agenthook.Spec {
+	name := filepath.Base(executable)
+	for _, s := range Specs {
+		if s.Agent == name {
+			return s
+		}
+	}
+	return nil
 }

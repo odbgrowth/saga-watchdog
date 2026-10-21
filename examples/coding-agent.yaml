@@ -13,6 +13,10 @@ run:
   # Unattended runs (CI, scripts): a pause denies further pre-action checks
   # but leaves the process running, since nobody is there to resume it.
   unattended: false
+  # Refuse to start unless the launched agent (claude, codex or gemini) has
+  # its own preventive hook configured and ready; a generic command is
+  # refused. See examples/hardened-coding-agent.yaml.
+  require_preventive_hook: false
 
 git:
   protected_branches: [main, master]
@@ -22,9 +26,12 @@ filesystem:
   # More than this many distinct delete/rename paths in the window pauses a run.
   delete_threshold: 100
   delete_window: 10s
-  # The profile protects policy, Git security files, CI and secret-like writes.
+  # The profile protects policy, Git security files, CI, agent hook settings,
+  # .mcp.json, .vscode/mcp.json, .vscode/tasks.json and secret-like writes.
   # Default ignores skip node_modules, vendor, dist, build and .git/objects.
-  # Omit protect/ignore here to retain the profile's path lists.
+  # Omit protect/ignore here to retain the profile's path lists. A protect
+  # list replaces the profile's; repeat the defaults and add your own paths,
+  # for example .vscode/launch.json or .devcontainer/**.
 
 escalation:
   window: 120s

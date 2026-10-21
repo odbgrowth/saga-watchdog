@@ -1,0 +1,120 @@
+# Hardened coding-agent policy. Copy to .saga-watchdog.yaml, read every
+# comment, adjust the lists to your project and run: saga-watchdog validate
+#
+# Compared with the default profile this policy permits fewer actions and
+# refuses to start unless the agent's own preventive hook is in place. It is
+# still a cooperative policy for Claude Code, Codex CLI or Gemini CLI started
+# with `saga-watchdog run`. It is not OS isolation: run the agent as a
+# separate user, in a container or VM, for a real privilege boundary.
+version: 1
+profile: coding-agent
+mode: enforce
+
+project:
+  name: hardened-project
+
+run:
+  max_duration: 1h
+  stop_grace_period: 5s
+  # Refuse to start unless the launched agent is claude, codex or gemini AND
+  # that agent's own hook is configured in this project and passes
+  # `saga-watchdog <agent> doctor`. A generic command cannot be verified and is
+  # refused instead of being called protected. Only Claude Code blocks a call
+  # when the hook itself cannot run; Codex and Gemini let it proceed.
+  require_preventive_hook: true
+  unattended: false
+
+git:
+  protected_branches: [main, master, 'release/**']
+  allow_protected: false
+
+filesystem:
+  # Supplying protect replaces the profile list, so the defaults are repeated.
+  # Policy, Git security, CI workflows, agent hook settings, .mcp.json and
+  # .vscode/tasks.json are protected in every policy and need no entry here.
+  # Writes to protected paths pause the run; through a hook they are refused
+  # before execution, otherwise they are observed after the fact.
+  protect:
+    - .saga-watchdog.yaml
+    - .git/config
+    - .git/hooks/**
+    - .github/workflows/**
+    - '**/.env'
+    - '**/.env.*'
+    - '**/credentials*'
+    - '**/secrets*'
+    - '**/*.pem'
+    - '**/*.key'
+    # Extra project files that influence tool execution in this project.
+    - .vscode/launch.json
+    - .devcontainer/**
+  delete_threshold: 50
+  delete_window: 10s
+
+escalation:
+  window: 120s
+  warn_after: 2
+  pause_after: 3
+  kill_after: 5
+  shell_follow_up: true
+
+network:
+  # Every reported host outside this list pauses the run until an operator
+  # grants it: saga-watchdog grant network <host>. Cooperative checks only;
+  # a shell command that opens a connection is not seen here.
+  mode: allowlist
+  allow: [api.github.com, .pypi.org, registry.npmjs.org, proxy.golang.org]
+  deny: [deploy.example.com]
+  deny_redirectors: true
+
+tools:
+  # Read-only MCP tools are allowed. Anything else, publishing a repository,
+  # sending a message, submitting a form, deploying, pauses the run with
+  # tool-unlisted until an operator grants it for that run. Identifiers are
+  # canonical server/tool names with path-style globs.
+  mode: allowlist
+  allow:
+    - 'github/get_*'
+    - 'github/list_*'
+    - 'github/search_*'
+    - 'filesystem/read_*'
+    - 'filesystem/list_*'
+  # Deny always wins, even over a grant.
+  deny:
+    - 'github/delete_*'
+    - 'payments/*'
+
+# Named effects group targets that reach the same restricted outcome. After a
+# denial, an alternate tool or host with the same effect continues the same
+# restriction (authority-expansion-after-denial), across runs and sessions.
+effects:
+  public.publish:
+    - tool:github/create_repository
+    - tool:github/update_repository
+    - tool:npm/publish
+  external.message:
+    - tool:slack/*
+    - tool:gmail/send_message
+    - tool:email/*
+  external.form:
+    - tool:browser/submit_form
+    - tool:playwright/*
+  production.deploy:
+    - network:deploy.example.com
+    - tool:vercel/*
+    - tool:github/create_deployment
+
+# With SAGA_WATCHDOG_OPERATOR set when you invoke saga-watchdog, enforced
+# restrictions persist for 24h (pause) or 7 days (kill) across runs and model
+# sessions of this operator, project and authorization context.
+security_context:
+  authorization_context: hardened
+  retention: 24h
+  serious_retention: 168h
+
+# No worker, sub-agent, inference endpoint or remote host is authorized.
+replication:
+  same_host_workers: 0
+  allow_agents: []
+  inference_endpoints: []
+  remote_hosts: []

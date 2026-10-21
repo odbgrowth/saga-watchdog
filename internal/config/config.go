@@ -79,6 +79,12 @@ type Run struct {
 	// present to resume, so enforcement continues through denied pre-action
 	// checks while the agent is left to finish or exit on its own.
 	Unattended bool `yaml:"unattended"`
+	// RequirePreventiveHook refuses to start a run unless the agent being
+	// launched is a supported one whose own preventive hook is configured in
+	// this project and passes the locally checkable prerequisites. A generic
+	// command cannot be verified and is refused. Off by default: a run without
+	// a hook keeps supervision and post-action observation, as before.
+	RequirePreventiveHook bool `yaml:"require_preventive_hook"`
 }
 type Git struct {
 	ProtectedBranches []string `yaml:"protected_branches"`

@@ -79,7 +79,7 @@ escalation scenarios.
 | --- | --- |
 | `init` | Create an inspectable project configuration. |
 | `validate` | Validate the project configuration. |
-| `doctor` | Check project, configuration, state storage and OS capabilities. |
+| `doctor` | Check project, configuration, state storage and OS capabilities, and print what this policy checks before execution, observes afterwards and cannot see. |
 | `run -- <command> [args...]` | Start and supervise an agent. |
 | `status [--run ID]` | Inspect the latest project run or a selected run. |
 | `events [--run ID]` | Read the latest project's structured event log or a selected run. |
@@ -143,6 +143,7 @@ run:
   max_duration: 2h
   stop_grace_period: 5s
   unattended: false
+  require_preventive_hook: false
 git:
   protected_branches: [main, master]
   allow_protected: false
@@ -224,6 +225,7 @@ The default profile includes:
 | Integration settings | When a deep integration is active, treat changes to the settings file that carries its blocking hook as tampering (`hook-tamper`, kill) and pause for changes to any sibling agent configuration file (`agent-config-modification`). |
 | Git security files | Protect `.git/config`, `.git/hooks/**` and linked-worktree `.git` pointers. |
 | CI workflows | Pause for changes under `.github/workflows/**`. |
+| Tool and editor configuration | Pause for changes to `.mcp.json`, `.vscode/mcp.json` and `.vscode/tasks.json`, which make a tool or an editor execute something (`project-config-modification`). |
 | Secret-like files | Pause for writes to `.env`, `.env.*`, `credentials*`, `secrets*`, `*.pem` and `*.key` at any depth. |
 | Generated trees | Ignore common dependency/build directories. |
 | Deletion bursts | Pause after more than 100 distinct delete/rename paths in 10 seconds. |
@@ -231,9 +233,34 @@ The default profile includes:
 | Escalation | Count related events in a bounded sliding window. |
 
 `filesystem.protect` and `filesystem.ignore` accept path patterns; supplying a
-list replaces that profile list. Policy, Git security and CI paths remain
-protected even when a broad ignore would match these mandatory paths. The
-default ignores skip dependency/build trees and `.git/objects`. Deletion
+list replaces that profile list. Policy, Git security, CI, agent hook
+settings and tool or editor configuration paths remain protected even when a
+broad ignore would match these mandatory paths. The default ignores skip
+dependency/build trees and `.git/objects`.
+
+To protect additional project paths, list them under `filesystem.protect`
+together with the defaults you want to keep, since the list replaces the
+profile's:
+
+```yaml
+filesystem:
+  protect:
+    - .saga-watchdog.yaml
+    - '**/.env'
+    - '**/.env.*'
+    - '**/credentials*'
+    - '**/secrets*'
+    - '**/*.pem'
+    - '**/*.key'
+    - .vscode/launch.json
+    - .devcontainer/**
+```
+
+A write to a protected path pauses the run (`protected-path`). Through a
+preventive hook it is refused before it happens; otherwise the filesystem
+observer reports it after the write, which SAGA cannot undo. Ordinary source
+files, `package.json` and lockfiles are deliberately not protected by
+default: developers and agents must be able to work. Deletion
 detection counts distinct observed paths, including renames; it cannot prove
 how many files were actually deleted.
 
@@ -382,6 +409,27 @@ configuration file pauses the run (`agent-config-modification`). Only a hook
 that can block counts as active: a disabled, background or post-action-only
 entry protects nothing, is not treated as a control, and is reported by
 `saga-watchdog <agent> doctor`.
+
+A supervisor that started does not prove that the agent's hook is in place:
+a project can carry the Claude Code hook while the operator starts Codex.
+Set `run.require_preventive_hook: true` to make `run` refuse unless the
+launched executable is a supported agent and that agent's own hook passes
+the checks of `saga-watchdog <agent> doctor`: hook command and agent on
+`PATH`, a Claude Code version with `onFailure: "block"` or the Codex hooks
+feature enabled, the hook configured, able to block, not disabled by a
+sibling file and not world-writable. The refusal lists what to fix. A
+generic command such as `bash` cannot be verified and is refused with that
+explanation rather than being called protected. The setting is off by
+default. It verifies configuration, not behaviour: a configured hook does
+not prove that the agent invokes it or honours every failure, and only
+Claude Code blocks a call when the hook itself cannot run.
+
+The run banner and `doctor` print the same `Coverage` lines: which hook
+checks before execution and how it fails (a hook installed for another agent
+is listed as installed but not loaded by the launched one), that network and tool checks are
+cooperative, that file writes are checked before execution only through a
+hook, that credential reads, detached processes and other hosts are not
+observed, and whether authority correlation persists for the context.
 
 ## What Watchdog can see
 

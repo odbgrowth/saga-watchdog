@@ -136,8 +136,15 @@ Open `/hooks` inside Claude Code to confirm the entries are loaded.
 saga-watchdog run -- claude
 ```
 
-The startup banner shows `Hooks    claude-code via .claude/settings.json`
-when the integration is detected. The supervised child receives
+The startup banner shows `Hooks    preventive via .claude/settings.json`
+when the integration is detected, followed by `Coverage` lines that state
+what the hook checks before execution, that Claude Code blocks a call when
+the hook cannot run (`onFailure: "block"`), and what stays observed
+afterwards or unseen. With `run.require_preventive_hook: true` in the policy,
+`run -- claude` refuses to start unless this hook passes the checks of
+`saga-watchdog claude doctor`; see the
+[coding-agent guide](coding-agent.md#running-claude-code-codex-cli-or-gemini-cli).
+The supervised child receives
 `SAGA_WATCHDOG_SOCKET` and `SAGA_WATCHDOG_RUN_ID`; the hook uses both and
 rejects any other run.
 
@@ -195,6 +202,12 @@ a denial. Pre-action enforcement never depends on them.
 | `mcp__<server>__<tool>` | `tool` / `call` | `server/tool` | Arguments are discarded. |
 | Any other matched tool | `tool` / `call` | tool name | Bounded identifier only; no capability is inferred from the name. |
 | `ConfigChange` (project or local settings) | `file` / `write` | the settings file | Kill (`hook-tamper`) when that file carries the SAGA hook, like editing `.saga-watchdog.yaml`. Pause (`agent-config-modification`) for the sibling settings file, which can disable or loosen the hook; this includes Claude's own "always allow" save to `.claude/settings.local.json`. Exit 2 keeps the change from being applied. |
+
+A `Write` or `Edit` of `.mcp.json`, `.vscode/mcp.json` or `.vscode/tasks.json`
+is refused before execution and pauses the run (`project-config-modification`):
+those files make a tool or the editor execute something. Other MCP server
+definitions, for example in `~/.claude.json`, are outside the project and
+not seen.
 
 Tools outside the matcher (`Read`, `Glob`, `Grep`, `WebSearch`, `Agent`,
 `AskUserQuestion`, ...) never reach SAGA. File reads are not monitored.
@@ -299,7 +312,7 @@ wrote the file.
 | Every tool call is blocked with "preventive check unavailable" | Claude was started without SAGA, or the run ended. Start it with `saga-watchdog run -- claude`, or remove the hook (section 19). |
 | `claude doctor` reports no SAGA hook | Run `saga-watchdog claude setup`, then check `/hooks` inside Claude Code. |
 | Hook does not fire | Accept the workspace trust dialog; check `disableAllHooks`; confirm `saga-watchdog` resolves on the `PATH` Claude inherits. |
-| `claude doctor` warns that Claude Code predates 2.1.295 | Upgrade Claude Code. Until then a hook crash or timeout is non-blocking on Claude's side. |
+| `claude doctor` fails because Claude Code predates 2.1.295 | Upgrade Claude Code. Until then a hook crash or timeout is non-blocking on Claude's side, and a policy with `run.require_preventive_hook` refuses to start. |
 | Run pauses on an expected edit | Inspect `saga-watchdog events`, then `resume` or `kill` the run explicitly. |
 | Run pauses right after choosing "always allow" in a permission prompt | Claude saved a rule to `.claude/settings.local.json`; that change is held back and the run waits for review. Resume it, or choose those rules before starting a supervised run. If the hook lives in that file (`setup --local`), the save is hook tampering and stops the run; move the hook to `.claude/settings.json`. |
 | Warnings about failure-escalation after a denial | Expected after related follow-ups; raise thresholds in `escalation` if needed. |
